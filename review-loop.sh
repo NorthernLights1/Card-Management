@@ -39,7 +39,7 @@ fi
 
 echo "Reviewing PR #${PR_NUMBER:-?}: ${PR_TITLE:-<unknown>}  -->  base: $BASE_BRANCH"
 
-git fetch origin "$BASE_BRANCH" --quiet || { echo "git fetch failed for $BASE_BRANCH"; exit 1; }
+git fetch origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH" --quiet || { echo "git fetch failed for $BASE_BRANCH"; exit 1; }
 COMPARE_REF="origin/${BASE_BRANCH}"
 
 MAX_ITERS=5
@@ -171,6 +171,19 @@ Add only the ones that directly cover the blocking issues above. Ignore the rest
     tail -n 200 "$CHECK_LOG" | codex exec resume --last --dangerously-bypass-approvals-and-sandbox \
       "Your fix broke verification. Here is the real output (last 200 lines) above. Fix the root cause without reintroducing the blocking issue you just fixed." \
       || { echo "Codex resume fix pass failed."; exit 1; }
+
+    echo "-- Re-running real checks after resume fix --"
+    if run_checks "$CHECK_LOG"; then
+      CHECK_STATUS=0
+    else
+      CHECK_STATUS=$?
+    fi
+
+    if [ "$CHECK_STATUS" -ne 0 ]; then
+      echo "Verification still fails after resume fix. Last 200 lines:"
+      tail -n 200 "$CHECK_LOG"
+      exit "$CHECK_STATUS"
+    fi
   fi
 
   echo "-- Committing fix before re-review --"
