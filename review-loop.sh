@@ -4,9 +4,37 @@
 #   printf '%s\n' '{"verdict":"APPROVE","blocking_comments":[],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
 #   printf '%s\n' '{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"review-loop.sh","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
 #   printf '%s\n' 'not json' | ./review-loop.sh --dry-run-verdict
+#   ./review-loop.sh --dry-run-verdict-schema-test
 #   ./review-loop.sh --dry-run-sandbox-gate
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
+
+validate_review_output_schema() {
+  local source="${1:-}"
+  local jq_filter='
+    def string_array: type == "array" and all(.[]; type == "string");
+    type == "object"
+    and (keys | sort == ["blocking_comments", "follow_up_patch_plan", "missing_tests", "non_blocking_comments", "verdict"])
+    and (.verdict | type == "string" and IN("APPROVE", "APPROVE WITH COMMENTS", "REQUEST CHANGES", "BLOCK MERGE"))
+    and (.blocking_comments | type == "array")
+    and all(.blocking_comments[]; type == "object"
+      and (keys | sort == ["file", "issue", "location", "suggested_fix", "why_it_matters"])
+      and (.file | type == "string")
+      and (.location | type == "string")
+      and (.issue | type == "string")
+      and (.why_it_matters | type == "string")
+      and (.suggested_fix | type == "string"))
+    and (.non_blocking_comments | string_array)
+    and (.missing_tests | string_array)
+    and (.follow_up_patch_plan | string_array)
+  '
+
+  if [[ -n "$source" ]]; then
+    jq -e "$jq_filter" "$source" >/dev/null
+  else
+    jq -e "$jq_filter" >/dev/null
+  fi
+}
 
 require_disposable_sandbox_for_pr_checks() {
   if [[ "${I_AM_IN_A_DISPOSABLE_SANDBOX:-}" != "1" ]]; then
@@ -16,10 +44,30 @@ require_disposable_sandbox_for_pr_checks() {
   fi
 }
 
+assert_dry_run_verdict_rejects() {
+  local input="$1"
+
+  if printf '%s\n' "$input" | "$0" --dry-run-verdict >/dev/null 2>&1; then
+    echo "Expected --dry-run-verdict to reject: $input"
+    exit 1
+  fi
+}
+
+if [[ "${1:-}" == "--dry-run-verdict-schema-test" ]]; then
+  assert_dry_run_verdict_rejects '{}'
+  assert_dry_run_verdict_rejects '{"verdict":"APPROVE"}'
+  echo "Dry-run verdict schema gate rejects invalid review JSON."
+  exit 0
+fi
+
 if [[ "${1:-}" == "--dry-run-verdict" ]]; then
   command -v jq >/dev/null 2>&1 || { echo "Missing dependency: jq"; exit 1; }
   if ! REVIEW_OUTPUT=$(jq -c . 2>/dev/null); then
     echo "Malformed review JSON."
+    exit 2
+  fi
+  if ! printf '%s\n' "$REVIEW_OUTPUT" | validate_review_output_schema; then
+    echo "Review JSON does not match the required schema."
     exit 2
   fi
   VERDICT=$(echo "$REVIEW_OUTPUT" | jq -r '.verdict')
@@ -212,6 +260,12 @@ for i in $(seq 1 "$MAX_ITERS"); do
 
   if ! jq -e . "$REVIEW_JSON" >/dev/null 2>&1; then
     echo "Got non-JSON final message from codex review call on pass $i."
+    echo "Final message saved to: $REVIEW_JSON"
+    echo "CLI stdout saved to: $REVIEW_STDOUT"
+    exit 1
+  fi
+  if ! validate_review_output_schema "$REVIEW_JSON"; then
+    echo "Codex review JSON did not match the required schema on pass $i."
     echo "Final message saved to: $REVIEW_JSON"
     echo "CLI stdout saved to: $REVIEW_STDOUT"
     exit 1
