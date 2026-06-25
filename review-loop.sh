@@ -4,8 +4,17 @@
 #   printf '%s\n' '{"verdict":"APPROVE","blocking_comments":[],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
 #   printf '%s\n' '{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"review-loop.sh","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
 #   printf '%s\n' 'not json' | ./review-loop.sh --dry-run-verdict
+#   ./review-loop.sh --dry-run-sandbox-gate
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
+
+require_disposable_sandbox_for_pr_checks() {
+  if [[ "${I_AM_IN_A_DISPOSABLE_SANDBOX:-}" != "1" ]]; then
+    echo "Refusing to run PR-controlled package scripts outside a disposable sandbox."
+    echo "Set I_AM_IN_A_DISPOSABLE_SANDBOX=1 only inside an isolated disposable environment."
+    return 1
+  fi
+}
 
 if [[ "${1:-}" == "--dry-run-verdict" ]]; then
   command -v jq >/dev/null 2>&1 || { echo "Missing dependency: jq"; exit 1; }
@@ -22,6 +31,15 @@ if [[ "${1:-}" == "--dry-run-verdict" ]]; then
   fi
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   exit 20
+fi
+
+if [[ "${1:-}" == "--dry-run-sandbox-gate" ]]; then
+  if (unset I_AM_IN_A_DISPOSABLE_SANDBOX; require_disposable_sandbox_for_pr_checks >/dev/null 2>&1); then
+    echo "Sandbox gate failed open."
+    exit 1
+  fi
+  echo "Sandbox gate fails closed before PR-controlled checks."
+  exit 0
 fi
 
 for cmd in gh codex git jq mktemp npm; do
@@ -114,6 +132,8 @@ Do not edit files unless explicitly asked."
 
 run_checks() {
   # $1 = output file
+  require_disposable_sandbox_for_pr_checks > "$1" 2>&1 || return $?
+
   if [[ "${ALLOW_NPM_INSTALL_SCRIPTS:-}" == "1" ]]; then
     NPM_CI_ARGS=(ci)
   else
