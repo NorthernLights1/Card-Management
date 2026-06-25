@@ -181,21 +181,24 @@ ensure_only_allowed_files_changed() {
 for i in $(seq 1 "$MAX_ITERS"); do
   echo "== Review pass $i/$MAX_ITERS (fresh session, no memory of prior fixes) =="
 
-  REVIEW_OUTPUT=$(codex exec "${CODEX_EXEC_SANDBOX_ARGS[@]}" --ephemeral \
-    --output-schema "$SCHEMA_FILE" "$REVIEW_PROMPT") \
+  REVIEW_JSON="$LOG_DIR/review-$i.json"
+  REVIEW_STDOUT="$LOG_DIR/review-$i-stdout.txt"
+
+  codex exec "${CODEX_EXEC_SANDBOX_ARGS[@]}" --ephemeral \
+    --output-schema "$SCHEMA_FILE" \
+    --output-last-message "$REVIEW_JSON" \
+    "$REVIEW_PROMPT" > "$REVIEW_STDOUT" \
     || { echo "Codex review call failed."; exit 1; }
 
-  if ! echo "$REVIEW_OUTPUT" | jq -e . >/dev/null 2>&1; then
-    echo "$REVIEW_OUTPUT" > "$LOG_DIR/review-$i-raw.txt"
-    echo "Got non-JSON output from --output-schema on pass $i."
-    echo "My assumption about --output-schema's output format may not match your installed CLI version."
-    echo "Raw output saved to: $LOG_DIR/review-$i-raw.txt -- inspect it before re-running."
+  if ! jq -e . "$REVIEW_JSON" >/dev/null 2>&1; then
+    echo "Got non-JSON final message from codex review call on pass $i."
+    echo "Final message saved to: $REVIEW_JSON"
+    echo "CLI stdout saved to: $REVIEW_STDOUT"
     exit 1
   fi
-  echo "$REVIEW_OUTPUT" > "$LOG_DIR/review-$i.json"
 
-  VERDICT=$(echo "$REVIEW_OUTPUT" | jq -r '.verdict')
-  BLOCKING_COUNT=$(echo "$REVIEW_OUTPUT" | jq '.blocking_comments | length')
+  VERDICT=$(jq -r '.verdict' "$REVIEW_JSON")
+  BLOCKING_COUNT=$(jq '.blocking_comments | length' "$REVIEW_JSON")
 
   echo "Verdict: $VERDICT | Blocking comments: $BLOCKING_COUNT"
 
@@ -214,14 +217,14 @@ for i in $(seq 1 "$MAX_ITERS"); do
   fi
 
   echo "-- Blocking issues present. Starting scoped fix pass. --"
-  BLOCKING_JSON=$(echo "$REVIEW_OUTPUT" | jq '.blocking_comments')
+  BLOCKING_JSON=$(jq '.blocking_comments' "$REVIEW_JSON")
   mapfile -t ALLOWED_FIX_PATHS < <(echo "$BLOCKING_JSON" | jq -r '.[].file' | sort -u)
   validate_allowed_fix_paths "${ALLOWED_FIX_PATHS[@]}"
 
   FIX_PROMPT="Fix ONLY the issues in this JSON array of blocking review comments (piped in above). Do not refactor outside the named files/functions. Stop once done -- do not re-review or judge your own fix."
 
   if [[ "$VERDICT" == "BLOCK MERGE" ]]; then
-    MISSING_TESTS=$(echo "$REVIEW_OUTPUT" | jq '.missing_tests')
+    MISSING_TESTS=$(jq '.missing_tests' "$REVIEW_JSON")
     FIX_PROMPT="$FIX_PROMPT
 
 Additionally, here are tests flagged as missing: $MISSING_TESTS
