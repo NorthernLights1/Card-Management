@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Usage: ./review-loop.sh
+# Smoke:
+#   printf '%s\n' '{"verdict":"APPROVE","blocking_comments":[],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
+#   printf '%s\n' '{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"review-loop.sh","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
+#   printf '%s\n' 'not json' | ./review-loop.sh --dry-run-verdict
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
 
 if [[ "${1:-}" == "--dry-run-verdict" ]]; then
   command -v jq >/dev/null 2>&1 || { echo "Missing dependency: jq"; exit 1; }
-  REVIEW_OUTPUT=$(cat)
+  if ! REVIEW_OUTPUT=$(jq -c . 2>/dev/null); then
+    echo "Malformed review JSON."
+    exit 2
+  fi
   VERDICT=$(echo "$REVIEW_OUTPUT" | jq -r '.verdict')
   BLOCKING_COUNT=$(echo "$REVIEW_OUTPUT" | jq '.blocking_comments | length')
   echo "Verdict: $VERDICT | Blocking comments: $BLOCKING_COUNT"
@@ -20,6 +27,14 @@ fi
 for cmd in gh codex git jq mktemp npm; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing dependency: $cmd"; exit 1; }
 done
+
+if [[ "${I_AM_IN_A_DISPOSABLE_SANDBOX:-}" == "1" ]]; then
+  CODEX_EXEC_SANDBOX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+  CODEX_RESUME_SANDBOX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+else
+  CODEX_EXEC_SANDBOX_ARGS=(--sandbox workspace-write)
+  CODEX_RESUME_SANDBOX_ARGS=(-c 'sandbox_mode="workspace-write"')
+fi
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "Working tree has uncommitted changes. Commit or stash them before running this loop,"
@@ -99,7 +114,13 @@ Do not edit files unless explicitly asked."
 
 run_checks() {
   # $1 = output file
-  { (cd clinic && npm ci && npm run build) \
+  if [[ "${ALLOW_NPM_INSTALL_SCRIPTS:-}" == "1" ]]; then
+    NPM_CI_ARGS=(ci)
+  else
+    NPM_CI_ARGS=(ci --ignore-scripts)
+  fi
+
+  { (cd clinic && npm "${NPM_CI_ARGS[@]}" && npm run build) \
       && if command -v cargo >/dev/null 2>&1; then
           (cd clinic/src-tauri && cargo check) \
             && (cd clinic/src-tauri && cargo test)
@@ -108,10 +129,59 @@ run_checks() {
         fi ; } > "$1" 2>&1
 }
 
+validate_allowed_fix_paths() {
+  local path
+
+  for path in "$@"; do
+    if [[ -z "$path" || "$path" == /* || "$path" == *'..'* ]]; then
+      echo "Blocking comment has an unsafe file path: $path"
+      exit 1
+    fi
+  done
+}
+
+ensure_only_allowed_files_changed() {
+  local changed allowed path
+  local -a changed_files=()
+  local -a allowed_files=("$@")
+
+  mapfile -t changed_files < <(
+    {
+      git diff --name-only
+      git diff --cached --name-only
+      git ls-files --others --exclude-standard
+    } | sort -u
+  )
+
+  if [ "${#changed_files[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "-- Changed files after fix --"
+  printf '%s\n' "${changed_files[@]}"
+
+  for changed in "${changed_files[@]}"; do
+    allowed=0
+    for path in "${allowed_files[@]}"; do
+      if [[ "$changed" == "$path" ]]; then
+        allowed=1
+        break
+      fi
+    done
+
+    if [ "$allowed" -ne 1 ]; then
+      echo "Refusing to commit changes outside blocking comment file allowlist: $changed"
+      echo "Allowed files:"
+      printf '%s\n' "${allowed_files[@]}"
+      exit 1
+    fi
+  done
+}
+
 for i in $(seq 1 "$MAX_ITERS"); do
   echo "== Review pass $i/$MAX_ITERS (fresh session, no memory of prior fixes) =="
 
-  REVIEW_OUTPUT=$(codex exec --dangerously-bypass-approvals-and-sandbox --ephemeral \
+  REVIEW_OUTPUT=$(codex exec "${CODEX_EXEC_SANDBOX_ARGS[@]}" --ephemeral \
     --output-schema "$SCHEMA_FILE" "$REVIEW_PROMPT") \
     || { echo "Codex review call failed."; exit 1; }
 
@@ -145,6 +215,9 @@ for i in $(seq 1 "$MAX_ITERS"); do
 
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   BLOCKING_JSON=$(echo "$REVIEW_OUTPUT" | jq '.blocking_comments')
+  mapfile -t ALLOWED_FIX_PATHS < <(echo "$BLOCKING_JSON" | jq -r '.[].file' | sort -u)
+  validate_allowed_fix_paths "${ALLOWED_FIX_PATHS[@]}"
+
   FIX_PROMPT="Fix ONLY the issues in this JSON array of blocking review comments (piped in above). Do not refactor outside the named files/functions. Stop once done -- do not re-review or judge your own fix."
 
   if [[ "$VERDICT" == "BLOCK MERGE" ]]; then
@@ -155,7 +228,7 @@ Additionally, here are tests flagged as missing: $MISSING_TESTS
 Add only the ones that directly cover the blocking issues above. Ignore the rest."
   fi
 
-  echo "$BLOCKING_JSON" | codex exec --dangerously-bypass-approvals-and-sandbox "$FIX_PROMPT" \
+  echo "$BLOCKING_JSON" | codex exec "${CODEX_EXEC_SANDBOX_ARGS[@]}" "$FIX_PROMPT" \
     || { echo "Codex fix pass failed."; exit 1; }
 
   echo "-- Running real checks after fix --"
@@ -168,7 +241,7 @@ Add only the ones that directly cover the blocking issues above. Ignore the rest
 
   if [ "$CHECK_STATUS" -ne 0 ]; then
     echo "Fix broke verification. Feeding last 200 lines of real output back to the same fix session."
-    tail -n 200 "$CHECK_LOG" | codex exec resume --last --dangerously-bypass-approvals-and-sandbox \
+    tail -n 200 "$CHECK_LOG" | codex exec resume --last "${CODEX_RESUME_SANDBOX_ARGS[@]}" \
       "Your fix broke verification. Here is the real output (last 200 lines) above. Fix the root cause without reintroducing the blocking issue you just fixed." \
       || { echo "Codex resume fix pass failed."; exit 1; }
 
@@ -187,7 +260,8 @@ Add only the ones that directly cover the blocking issues above. Ignore the rest
   fi
 
   echo "-- Committing fix before re-review --"
-  git add -A
+  ensure_only_allowed_files_changed "${ALLOWED_FIX_PATHS[@]}"
+  git add -- "${ALLOWED_FIX_PATHS[@]}"
   git commit -m "fix: address blocking review comments (pass $i)" --quiet || echo "Nothing to commit."
 
   echo "-- Re-reviewing from scratch next pass --"
