@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { DriveInfo, UsbStatus } from "../lib/api";
+import type { DriveInfo, Role, UsbStatus, UserInfo } from "../lib/api";
 import {
+  addUser,
   exportBackup,
   exportPatientCsv,
   listRemovableDrives,
+  listUsers,
   readAuditLog,
+  removeUser,
   restoreApply,
   restorePreview,
   setUsbBackup,
@@ -14,11 +17,12 @@ import {
 import { ImportScreen } from "./ImportScreen";
 
 type Props = {
+  user: UserInfo;
   onBack: () => void;
   onRestored: () => void;
 };
 
-export function SettingsScreen({ onBack, onRestored }: Props) {
+export function SettingsScreen({ user, onBack, onRestored }: Props) {
   const [usb, setUsb] = useState<UsbStatus | null>(null);
   const [drives, setDrives] = useState<DriveInfo[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -26,11 +30,42 @@ export function SettingsScreen({ onBack, onRestored }: Props) {
   const [restore, setRestore] = useState<RestoreState | null>(null);
   const [auditLog, setAuditLog] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [users, setUsers] = useState<UserInfo[] | null>(null);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [addForm, setAddForm] = useState({ username: "", password: "", role: "Staff" as Role });
 
   const loadUsb = () => usbStatus().then(setUsb).catch((e) => setError(String(e)));
+  const loadUsers = () => listUsers().then(setUsers).catch((e) => setError(String(e)));
   useEffect(() => {
     loadUsb();
+    loadUsers();
   }, []);
+
+  const doAddUser = async () => {
+    setError(null);
+    const name = addForm.username.trim();
+    try {
+      await addUser(name, addForm.password, addForm.role);
+      setAddForm({ username: "", password: "", role: "Staff" });
+      setShowAddUser(false);
+      setMessage(`User "${name}" added.`);
+      loadUsers();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const doRemoveUser = async (username: string) => {
+    if (!window.confirm(`Remove user "${username}"? They will no longer be able to log in.`)) return;
+    setError(null);
+    try {
+      await removeUser(username);
+      setMessage(`User "${username}" removed.`);
+      loadUsers();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const chooseDrives = async () => {
     setError(null);
@@ -102,6 +137,82 @@ export function SettingsScreen({ onBack, onRestored }: Props) {
 
       {error && <div className="banner error">{error}</div>}
       {message && <div className="banner warn">{message}</div>}
+
+      <div className="form-card" style={{ marginBottom: 16 }}>
+        <div className="section-title">Users</div>
+        {users === null ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          users.map((u) => (
+            <div className="result-row" key={u.username} style={{ gridTemplateColumns: "1fr auto", marginBottom: 4 }}>
+              <div>
+                <span className="result-name">{u.username}</span>
+                {u.username === user.username && (
+                  <span className="muted" style={{ marginLeft: 6 }}>(you)</span>
+                )}
+                <div className="result-meta">{u.role}</div>
+              </div>
+              {u.username !== user.username && (
+                <button className="danger" onClick={() => doRemoveUser(u.username)}>
+                  Remove
+                </button>
+              )}
+            </div>
+          ))
+        )}
+        {!showAddUser ? (
+          <button style={{ marginTop: 10 }} onClick={() => setShowAddUser(true)}>
+            + Add user
+          </button>
+        ) : (
+          <div style={{ marginTop: 12, padding: 12, background: "var(--surface-2)", borderRadius: 8 }}>
+            <div className="field">
+              <label>Username</label>
+              <input
+                value={addForm.username}
+                onChange={(e) => setAddForm({ ...addForm, username: e.target.value })}
+                autoFocus
+              />
+            </div>
+            <div className="field">
+              <label>Password</label>
+              <input
+                type="password"
+                value={addForm.password}
+                onChange={(e) => setAddForm({ ...addForm, password: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <label>Role</label>
+              <select
+                value={addForm.role}
+                onChange={(e) => setAddForm({ ...addForm, role: e.target.value as Role })}
+              >
+                <option value="Staff">Staff</option>
+                <option value="Admin">Admin</option>
+              </select>
+            </div>
+            <div className="form-actions">
+              <button
+                className="ghost"
+                onClick={() => {
+                  setShowAddUser(false);
+                  setAddForm({ username: "", password: "", role: "Staff" });
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary"
+                onClick={doAddUser}
+                disabled={!addForm.username.trim() || !addForm.password}
+              >
+                Add user
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="form-card" style={{ marginBottom: 16 }}>
         <div className="section-title">USB backup</div>
