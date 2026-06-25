@@ -1,0 +1,770 @@
+//! Patient model, validation, card numbering, and data access.
+//!
+//! All functions take a `&Connection` (or `&mut` for writes) so they can run
+//! against the encrypted DB in production and an in-memory DB in tests.
+
+use rusqlite::{params, Connection, OptionalExtension, Row};
+
+const CARD_SUB_MAX: i64 = 8; // numbering runs first/0 .. first/8, then (first+1)/0
+
+/// The next card number after (first, sub): sub wraps 0..8, then first increments.
+fn advance_card(first: i64, sub: i64) -> (i64, i64) {
+    if sub < CARD_SUB_MAX {
+        (first, sub + 1)
+    } else {
+        (first + 1, 0)
+    }
+}
+
+/// Ethiopian-calendar date (the only date the user enters; system timestamps are
+/// stored separately in system time).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EcDate {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+}
+
+/// Incoming patient data from the UI.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PatientInput {
+    pub first_name: String,
+    pub father_name: String,
+    pub grandfather_name: String,
+    pub sex: String,
+    pub phone: String,
+    pub dob: Option<EcDate>,
+    pub age: Option<i64>,
+    pub address: Option<String>,
+    pub city: Option<String>,
+}
+
+/// A stored patient as returned to the UI.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Patient {
+    pub id: i64,
+    pub card_number: String,
+    pub first_name: String,
+    pub father_name: String,
+    pub grandfather_name: String,
+    pub sex: String,
+    pub phone: String,
+    pub dob: Option<EcDate>,
+    pub age_recorded: Option<i64>,
+    pub age_recorded_on: Option<String>,
+    pub address: Option<String>,
+    pub city: Option<String>,
+    pub registered_at: String,
+}
+
+// --- validation -------------------------------------------------------------
+
+/// Validate at the trust boundary. Returns a user-facing message on failure.
+pub fn validate(input: &PatientInput) -> Result<(), String> {
+    require(&input.first_name, "First name is required")?;
+    require(&input.father_name, "Father's name is required")?;
+    require(&input.grandfather_name, "Grandfather's name is required")?;
+
+    if input.sex != "Male" && input.sex != "Female" {
+        return Err("Sex must be Male or Female".into());
+    }
+    if !is_valid_phone(&input.phone) {
+        return Err("Phone must be 10 digits starting with 09 or 07".into());
+    }
+    match (&input.dob, input.age) {
+        (None, None) => Err("Either date of birth or age is required".into()),
+        (Some(dob), _) => validate_ec(dob), // DOB present → it wins, age ignored
+        (None, Some(age)) => {
+            if (0..=200).contains(&age) {
+                Ok(())
+            } else {
+                Err("Age looks invalid".into())
+            }
+        }
+    }
+}
+
+fn require(value: &str, msg: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err(msg.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn is_valid_phone(p: &str) -> bool {
+    p.len() == 10
+        && p.bytes().all(|b| b.is_ascii_digit())
+        && (p.starts_with("09") || p.starts_with("07"))
+}
+
+fn validate_ec(d: &EcDate) -> Result<(), String> {
+    if !(1..=3000).contains(&d.year) {
+        return Err("Date of birth year is out of range".into());
+    }
+    if !(1..=13).contains(&d.month) {
+        return Err("Ethiopian month must be 1-13".into());
+    }
+    // ponytail: months 1-12 have 30 days; month 13 (Pagumē) has 5-6.
+    // Allow up to 6 rather than computing the leap day.
+    let max_day = if d.month == 13 { 6 } else { 30 };
+    if d.day < 1 || d.day > max_day {
+        return Err(format!("Day must be 1-{max_day} for that month"));
+    }
+    Ok(())
+}
+
+// --- card numbering ---------------------------------------------------------
+
+/// Read and advance the next card number. Never reuses a number. Caller must run
+/// this inside the same transaction as the patient insert.
+fn assign_next_card(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
+    let (first, sub): (i64, i64) = conn.query_row(
+        "SELECT next_first, next_sub FROM card_seq WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let (next_first, next_sub) = advance_card(first, sub);
+    conn.execute(
+        "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
+        params![next_first, next_sub],
+    )?;
+    Ok((first, sub))
+}
+
+fn card_number(first: i64, sub: i64) -> String {
+    format!("{first}/{sub}")
+}
+
+// --- writes -----------------------------------------------------------------
+
+/// Insert a new patient, auto-assigning the next card number.
+pub fn create(conn: &mut Connection, input: &PatientInput, actor: &str) -> Result<Patient, String> {
+    validate(input)?;
+    let now = now_string();
+    let tx = conn.transaction().map_err(e2s)?;
+    let (card_first, card_sub) = assign_next_card(&tx).map_err(e2s)?;
+
+    let (dy, dm, dd) = match &input.dob {
+        Some(d) => (Some(d.year), Some(d.month), Some(d.day)),
+        None => (None, None, None),
+    };
+    // Age is stored only when DOB is unknown, alongside the date it was recorded
+    // so the displayed age can increment over time.
+    let (age, age_on) = match (&input.dob, input.age) {
+        (None, Some(a)) => (Some(a), Some(now.clone())),
+        _ => (None, None),
+    };
+
+    tx.execute(
+        "INSERT INTO patients
+            (card_first, card_sub, first_name, father_name, grandfather_name, sex, phone,
+             dob_year, dob_month, dob_day, age_recorded, age_recorded_on,
+             address, city, registered_at, created_by)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        params![
+            card_first,
+            card_sub,
+            input.first_name.trim(),
+            input.father_name.trim(),
+            input.grandfather_name.trim(),
+            input.sex,
+            input.phone,
+            dy,
+            dm,
+            dd,
+            age,
+            age_on,
+            opt_trim(&input.address),
+            opt_trim(&input.city),
+            now,
+            actor,
+        ],
+    )
+    .map_err(e2s)?;
+    let id = tx.last_insert_rowid();
+    tx.commit().map_err(e2s)?;
+
+    get_by_id(conn, id)?.ok_or_else(|| "Patient vanished after insert".into())
+}
+
+/// Update an existing patient. The card number is immutable and never touched.
+pub fn update(conn: &Connection, id: i64, input: &PatientInput, actor: &str) -> Result<(), String> {
+    validate(input)?;
+    let now = now_string();
+    let (dy, dm, dd) = match &input.dob {
+        Some(d) => (Some(d.year), Some(d.month), Some(d.day)),
+        None => (None, None, None),
+    };
+    let (age, age_on) = match (&input.dob, input.age) {
+        (None, Some(a)) => (Some(a), Some(now.clone())),
+        _ => (None, None),
+    };
+    let rows = conn
+        .execute(
+            "UPDATE patients SET
+                first_name=?1, father_name=?2, grandfather_name=?3, sex=?4, phone=?5,
+                dob_year=?6, dob_month=?7, dob_day=?8, age_recorded=?9, age_recorded_on=?10,
+                address=?11, city=?12, updated_at=?13, updated_by=?14
+             WHERE id=?15 AND deleted_at IS NULL",
+            params![
+                input.first_name.trim(),
+                input.father_name.trim(),
+                input.grandfather_name.trim(),
+                input.sex,
+                input.phone,
+                dy,
+                dm,
+                dd,
+                age,
+                age_on,
+                opt_trim(&input.address),
+                opt_trim(&input.city),
+                now,
+                actor,
+                id,
+            ],
+        )
+        .map_err(e2s)?;
+    if rows == 0 {
+        return Err("Patient not found".into());
+    }
+    Ok(())
+}
+
+/// Soft-delete: hide the record but keep it (recoverable by an Admin).
+pub fn soft_delete(conn: &Connection, id: i64, actor: &str) -> Result<(), String> {
+    let rows = conn
+        .execute(
+            "UPDATE patients SET deleted_at=?1, deleted_by=?2
+             WHERE id=?3 AND deleted_at IS NULL",
+            params![now_string(), actor, id],
+        )
+        .map_err(e2s)?;
+    if rows == 0 {
+        return Err("Patient not found".into());
+    }
+    Ok(())
+}
+
+/// Restore a soft-deleted patient (Admin action).
+pub fn restore(conn: &Connection, id: i64) -> Result<(), String> {
+    let rows = conn
+        .execute(
+            "UPDATE patients SET deleted_at=NULL, deleted_by=NULL
+             WHERE id=?1 AND deleted_at IS NOT NULL",
+            params![id],
+        )
+        .map_err(e2s)?;
+    if rows == 0 {
+        return Err("Deleted patient not found".into());
+    }
+    Ok(())
+}
+
+/// Permanently remove a soft-deleted patient (Admin action). The card number is
+/// still never reused, so the physical drawer stays aligned.
+pub fn purge(conn: &Connection, id: i64) -> Result<(), String> {
+    let rows = conn
+        .execute(
+            "DELETE FROM patients WHERE id=?1 AND deleted_at IS NOT NULL",
+            params![id],
+        )
+        .map_err(e2s)?;
+    if rows == 0 {
+        return Err("Deleted patient not found".into());
+    }
+    Ok(())
+}
+
+/// List soft-deleted patients (Admin view), most recently deleted first.
+pub fn list_deleted(conn: &Connection) -> Result<Vec<Patient>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NOT NULL
+             ORDER BY deleted_at DESC LIMIT 500"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt.query_map([], row_to_patient).map_err(e2s)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
+// --- reads ------------------------------------------------------------------
+
+/// Card number for a patient id (regardless of deleted state) — for the audit log.
+pub fn card_of(conn: &Connection, id: i64) -> String {
+    conn.query_row(
+        "SELECT card_first || '/' || card_sub FROM patients WHERE id = ?1",
+        params![id],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| format!("id:{id}"))
+}
+
+pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<Patient>, String> {
+    conn.query_row(
+        &format!("SELECT {COLS} FROM patients WHERE id = ?1 AND deleted_at IS NULL"),
+        params![id],
+        row_to_patient,
+    )
+    .map(Some)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(e2s(other)),
+    })
+}
+
+/// Reverse lookup: search active patients by name parts, phone, or card number.
+pub fn search(conn: &Connection, query: &str) -> Result<Vec<Patient>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let like = format!("%{q}%");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients
+             WHERE deleted_at IS NULL AND (
+                 first_name LIKE ?1 OR father_name LIKE ?1 OR grandfather_name LIKE ?1
+                 OR phone LIKE ?1
+                 OR (card_first || '/' || card_sub) LIKE ?1
+             )
+             ORDER BY card_first, card_sub
+             LIMIT 100"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt
+        .query_map(params![like], row_to_patient)
+        .map_err(e2s)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
+/// Possible duplicates: same full name OR same phone (families share phones, so
+/// this is a warning signal, not a hard block).
+pub fn find_duplicates(conn: &Connection, input: &PatientInput) -> Result<Vec<Patient>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients
+             WHERE deleted_at IS NULL AND (
+                 (lower(first_name)=lower(?1) AND lower(father_name)=lower(?2)
+                  AND lower(grandfather_name)=lower(?3))
+                 OR phone = ?4
+             )
+             ORDER BY card_first, card_sub
+             LIMIT 50"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt
+        .query_map(
+            params![
+                input.first_name.trim(),
+                input.father_name.trim(),
+                input.grandfather_name.trim(),
+                input.phone,
+            ],
+            row_to_patient,
+        )
+        .map_err(e2s)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
+// --- import / export --------------------------------------------------------
+
+/// One row to import, with the existing card number preserved from the source.
+pub struct ImportItem {
+    pub row_index: usize,
+    pub card_number: String,
+    pub input: PatientInput,
+}
+
+#[derive(serde::Serialize)]
+pub struct ImportReport {
+    pub imported: usize,
+    pub skipped: Vec<SkippedRow>,
+}
+
+#[derive(serde::Serialize)]
+pub struct SkippedRow {
+    pub row: usize,
+    pub reason: String,
+}
+
+/// Import rows keeping their existing card numbers; reseed the counter to
+/// continue after the highest number. Invalid/duplicate rows are reported, not
+/// silently dropped.
+pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<ImportReport, String> {
+    let now = now_string();
+    let tx = conn.transaction().map_err(e2s)?;
+    let mut imported = 0usize;
+    let mut skipped: Vec<SkippedRow> = Vec::new();
+    for item in items {
+        if let Err(reason) = validate(&item.input) {
+            skipped.push(SkippedRow { row: item.row_index, reason });
+            continue;
+        }
+        let (cf, cs) = match parse_card(&item.card_number) {
+            Ok(v) => v,
+            Err(reason) => {
+                skipped.push(SkippedRow { row: item.row_index, reason });
+                continue;
+            }
+        };
+        match insert_with_card(&tx, cf, cs, &item.input, &now) {
+            Ok(()) => imported += 1,
+            Err(_) => skipped.push(SkippedRow {
+                row: item.row_index,
+                reason: format!("card {} already exists", item.card_number),
+            }),
+        }
+    }
+    reseed_card_seq(&tx).map_err(e2s)?;
+    tx.commit().map_err(e2s)?;
+    Ok(ImportReport { imported, skipped })
+}
+
+fn parse_card(s: &str) -> Result<(i64, i64), String> {
+    let s = s.trim();
+    let (a, b) = s
+        .split_once('/')
+        .ok_or_else(|| format!("invalid card number '{s}'"))?;
+    let first: i64 = a.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
+    let sub: i64 = b.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
+    if first < 1 || !(0..=CARD_SUB_MAX).contains(&sub) {
+        return Err(format!("card number out of range '{s}'"));
+    }
+    Ok((first, sub))
+}
+
+fn insert_with_card(
+    tx: &Connection,
+    cf: i64,
+    cs: i64,
+    input: &PatientInput,
+    now: &str,
+) -> rusqlite::Result<()> {
+    let (dy, dm, dd) = match &input.dob {
+        Some(d) => (Some(d.year), Some(d.month), Some(d.day)),
+        None => (None, None, None),
+    };
+    let (age, age_on) = match (&input.dob, input.age) {
+        (None, Some(a)) => (Some(a), Some(now.to_string())),
+        _ => (None, None),
+    };
+    tx.execute(
+        "INSERT INTO patients
+            (card_first, card_sub, first_name, father_name, grandfather_name, sex, phone,
+             dob_year, dob_month, dob_day, age_recorded, age_recorded_on,
+             address, city, registered_at, created_by)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'import')",
+        params![
+            cf, cs,
+            input.first_name.trim(),
+            input.father_name.trim(),
+            input.grandfather_name.trim(),
+            input.sex,
+            input.phone,
+            dy, dm, dd, age, age_on,
+            opt_trim(&input.address),
+            opt_trim(&input.city),
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Point the counter just past the highest card number currently stored.
+fn reseed_card_seq(tx: &Connection) -> rusqlite::Result<()> {
+    let max: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT card_first, card_sub FROM patients
+             ORDER BY card_first DESC, card_sub DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((f, s)) = max {
+        let (nf, ns) = advance_card(f, s);
+        tx.execute(
+            "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
+            params![nf, ns],
+        )?;
+    }
+    Ok(())
+}
+
+/// Write all active patients to a CSV file. Returns the row count.
+pub fn export_csv(conn: &Connection, path: &std::path::Path) -> Result<usize, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL ORDER BY card_first, card_sub"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt.query_map([], row_to_patient).map_err(e2s)?;
+    let mut out = String::from(
+        "card_number,first_name,father_name,grandfather_name,sex,phone,dob_ec,age,city,address,registered_at\n",
+    );
+    let mut count = 0usize;
+    for r in rows {
+        let p = r.map_err(e2s)?;
+        let dob = p
+            .dob
+            .map(|d| format!("{}-{:02}-{:02}", d.year, d.month, d.day))
+            .unwrap_or_default();
+        let age = p.age_recorded.map(|a| a.to_string()).unwrap_or_default();
+        let fields = [
+            p.card_number,
+            p.first_name,
+            p.father_name,
+            p.grandfather_name,
+            p.sex,
+            p.phone,
+            dob,
+            age,
+            p.city.unwrap_or_default(),
+            p.address.unwrap_or_default(),
+            p.registered_at,
+        ];
+        let line: Vec<String> = fields.iter().map(|f| csv_field(f)).collect();
+        out.push_str(&line.join(","));
+        out.push('\n');
+        count += 1;
+    }
+    std::fs::write(path, out).map_err(e2s)?;
+    Ok(count)
+}
+
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// All active patients (used by the CSV export command; search caps at 100).
+pub fn all_active(conn: &Connection) -> Result<Vec<Patient>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL ORDER BY card_first, card_sub"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt.query_map([], row_to_patient).map_err(e2s)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
+// --- row mapping ------------------------------------------------------------
+
+const COLS: &str = "id, card_first, card_sub, first_name, father_name, grandfather_name, sex, \
+     phone, dob_year, dob_month, dob_day, age_recorded, age_recorded_on, address, city, \
+     registered_at";
+
+fn row_to_patient(r: &Row) -> rusqlite::Result<Patient> {
+    let card_first: i64 = r.get(1)?;
+    let card_sub: i64 = r.get(2)?;
+    let dob_year: Option<i32> = r.get(8)?;
+    let dob_month: Option<u32> = r.get(9)?;
+    let dob_day: Option<u32> = r.get(10)?;
+    let dob = match (dob_year, dob_month, dob_day) {
+        (Some(year), Some(month), Some(day)) => Some(EcDate { year, month, day }),
+        _ => None,
+    };
+    Ok(Patient {
+        id: r.get(0)?,
+        card_number: card_number(card_first, card_sub),
+        first_name: r.get(3)?,
+        father_name: r.get(4)?,
+        grandfather_name: r.get(5)?,
+        sex: r.get(6)?,
+        phone: r.get(7)?,
+        dob,
+        age_recorded: r.get(11)?,
+        age_recorded_on: r.get(12)?,
+        address: r.get(13)?,
+        city: r.get(14)?,
+        registered_at: r.get(15)?,
+    })
+}
+
+// --- helpers ----------------------------------------------------------------
+
+fn now_string() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn opt_trim(v: &Option<String>) -> Option<String> {
+    v.as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn e2s<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_KEY: [u8; 32] = [7u8; 32];
+
+    fn input(first: &str, father: &str, grand: &str, phone: &str) -> PatientInput {
+        PatientInput {
+            first_name: first.into(),
+            father_name: father.into(),
+            grandfather_name: grand.into(),
+            sex: "Male".into(),
+            phone: phone.into(),
+            dob: None,
+            age: Some(30),
+            address: None,
+            city: None,
+        }
+    }
+
+    #[test]
+    fn card_numbers_run_1_0_through_1_8_then_2_0() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let mut numbers = Vec::new();
+        for i in 0..10 {
+            let p = create(&mut conn, &input("A", "B", &format!("C{i}"), "0911111111"), "tester")
+                .unwrap();
+            numbers.push(p.card_number);
+        }
+        assert_eq!(
+            numbers,
+            vec![
+                "1/0", "1/1", "1/2", "1/3", "1/4", "1/5", "1/6", "1/7", "1/8", "2/0"
+            ]
+        );
+    }
+
+    #[test]
+    fn deleted_card_numbers_are_not_reused() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let first = create(&mut conn, &input("A", "B", "C", "0911111111"), "t").unwrap();
+        assert_eq!(first.card_number, "1/0");
+        soft_delete(&conn, first.id, "t").unwrap();
+        let second = create(&mut conn, &input("D", "E", "F", "0911111112"), "t").unwrap();
+        assert_eq!(second.card_number, "1/1"); // not reusing 1/0
+    }
+
+    #[test]
+    fn phone_validation_accepts_09_and_07_ten_digits() {
+        let mut ok = input("A", "B", "C", "0911111111");
+        assert!(validate(&ok).is_ok());
+        ok.phone = "0711111111".into();
+        assert!(validate(&ok).is_ok());
+    }
+
+    #[test]
+    fn phone_validation_rejects_bad_numbers() {
+        for bad in ["091111111", "08911111111", "0911a11111", "1911111111", "09111111110"] {
+            let p = input("A", "B", "C", bad);
+            assert!(validate(&p).is_err(), "should reject {bad}");
+        }
+    }
+
+    #[test]
+    fn requires_age_or_dob() {
+        let mut p = input("A", "B", "C", "0911111111");
+        p.age = None;
+        p.dob = None;
+        assert!(validate(&p).is_err());
+        p.dob = Some(EcDate { year: 2000, month: 4, day: 15 });
+        assert!(validate(&p).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_ethiopian_dates() {
+        let mut p = input("A", "B", "C", "0911111111");
+        p.age = None;
+        p.dob = Some(EcDate { year: 2000, month: 14, day: 1 });
+        assert!(validate(&p).is_err());
+        p.dob = Some(EcDate { year: 2000, month: 13, day: 7 });
+        assert!(validate(&p).is_err());
+        p.dob = Some(EcDate { year: 2000, month: 13, day: 6 });
+        assert!(validate(&p).is_ok());
+    }
+
+    #[test]
+    fn duplicate_detection_matches_name_or_phone() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        create(&mut conn, &input("Abel", "Kebede", "Tadesse", "0911111111"), "t").unwrap();
+
+        // same full name, different phone
+        let same_name = input("abel", "kebede", "tadesse", "0922222222");
+        assert_eq!(find_duplicates(&conn, &same_name).unwrap().len(), 1);
+
+        // different name, same phone (shared family phone)
+        let same_phone = input("Sara", "Kebede", "Tadesse", "0911111111");
+        assert_eq!(find_duplicates(&conn, &same_phone).unwrap().len(), 1);
+
+        // unrelated
+        let neither = input("Yonas", "Girma", "Bekele", "0933333333");
+        assert_eq!(find_duplicates(&conn, &neither).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn search_finds_by_name_phone_and_card_number() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let p = create(&mut conn, &input("Meron", "Alemu", "Tesfaye", "0911223344"), "t").unwrap();
+        assert_eq!(search(&conn, "Meron").unwrap().len(), 1);
+        assert_eq!(search(&conn, "1122").unwrap().len(), 1);
+        assert_eq!(search(&conn, &p.card_number).unwrap().len(), 1);
+        assert_eq!(search(&conn, "Nonexistent").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn soft_deleted_patients_are_hidden_from_search_and_get() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let p = create(&mut conn, &input("Hidden", "X", "Y", "0911223344"), "t").unwrap();
+        soft_delete(&conn, p.id, "t").unwrap();
+        assert!(get_by_id(&conn, p.id).unwrap().is_none());
+        assert_eq!(search(&conn, "Hidden").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn restore_brings_a_deleted_patient_back() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let p = create(&mut conn, &input("Back", "X", "Y", "0911223344"), "t").unwrap();
+        soft_delete(&conn, p.id, "t").unwrap();
+        assert_eq!(list_deleted(&conn).unwrap().len(), 1);
+        restore(&conn, p.id).unwrap();
+        assert!(get_by_id(&conn, p.id).unwrap().is_some());
+        assert_eq!(list_deleted(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn purge_only_removes_deleted_and_never_reuses_number() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let p = create(&mut conn, &input("Gone", "X", "Y", "0911223344"), "t").unwrap();
+        assert_eq!(p.card_number, "1/0");
+        // cannot purge an active patient
+        assert!(purge(&conn, p.id).is_err());
+        soft_delete(&conn, p.id, "t").unwrap();
+        purge(&conn, p.id).unwrap();
+        assert_eq!(list_deleted(&conn).unwrap().len(), 0);
+        // next patient still gets 1/1, not the purged 1/0
+        let next = create(&mut conn, &input("New", "X", "Y", "0911223345"), "t").unwrap();
+        assert_eq!(next.card_number, "1/1");
+    }
+
+    #[test]
+    fn import_keeps_card_numbers_reports_bad_rows_and_continues_sequence() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let items = vec![
+            ImportItem { row_index: 1, card_number: "5/0".into(), input: input("Abel", "K", "T", "0911111111") },
+            ImportItem { row_index: 2, card_number: "5/1".into(), input: input("Sara", "K", "T", "0922222222") },
+            ImportItem { row_index: 3, card_number: "5/2".into(), input: input("Bad", "K", "T", "123") }, // bad phone
+        ];
+        let report = import_rows(&mut conn, &items).unwrap();
+        assert_eq!(report.imported, 2);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].row, 3);
+        // the imported cards are searchable
+        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "5/0");
+        // next auto-assigned card continues after the highest imported (5/1 -> 5/2)
+        let next = create(&mut conn, &input("New", "X", "Y", "0911111119"), "t").unwrap();
+        assert_eq!(next.card_number, "5/2");
+    }
+}

@@ -1,0 +1,219 @@
+# Feature Contract — Clinic Card Management System
+
+**Version:** 5.0 (approved) · **Date:** 2026-06-25
+
+---
+
+## 1. Purpose
+
+Single-PC, offline desktop application for a small clinic to manage basic patient
+information. Physical patient folders are filed by sequential card number (not
+alphabetized, by design). When a patient loses their card, staff struggle to find
+the folder. **The app's core job is the reverse lookup:** search by name or phone →
+get the card number → pull the physical folder.
+
+## 2. Constraints
+
+- One Windows PC. No server, no network. Fully offline.
+- No recurring cost, no paid services.
+- Small data volume.
+- Patient data is sensitive → login + encryption required.
+
+## 3. Platform & Stack
+
+- **GUI desktop app** — Tauri, Windows installer + desktop icon, offline. Not browser-based.
+- **Database:** SQLite encrypted at rest via **SQLCipher**.
+- React + TypeScript · maintained Ethiopian-calendar library (**used for DOB only**).
+- **English only** — no multi-language.
+
+---
+
+## 4. Patient Record
+
+| Field | Required | Rules |
+|---|---|---|
+| **Card number** | Auto | `first/sub` (e.g. `2/3`). System-assigned, unique, read-only. See §5. |
+| **First name** | Yes | Text. |
+| **Father's name** | Yes | Text. |
+| **Grandfather's name** | Yes | Text. |
+| **Age** *or* **DOB** | One of the two | **DOB** entered in **Ethiopian calendar**; age derived from it. **Age** stored with the date recorded, so displayed age **auto-increases each year** (computed live — §4.1). |
+| **Sex** | Yes | Male / Female only. |
+| **Phone** | **Yes** | 10 digits, must start `09` or `07`. Non-unique (families share numbers) but used for duplicate detection. |
+| **Address** | No | Single free-text box. |
+| **City** | No | Text. |
+| **Registered timestamp** | Auto | **System date & time** (Gregorian, from the PC clock) — *not* EC. |
+
+**4.1 Auto-incrementing age** — age is not bumped yearly by a job. We store the age
+**plus the date it was given**, and the app **computes the current age on the fly**
+(recorded age + whole years elapsed). Always correct, no maintenance. DOB-based ages
+compute from the EC DOB the same way.
+
+---
+
+## 5. Card Numbering
+
+- Format `first/sub`. `sub` runs 0→8; when it passes 8, `first`+1 and `sub`→0.
+- `first` is **unbounded**: `1/0 … 1/8 → 2/0 … 9/8 → 10/0 …`. Starts at **`1/0`**.
+- **Auto-assigned** — staff never type it.
+- Deleted numbers are **not reused** (stays aligned with the physical drawer).
+- Excel import **keeps existing card numbers**; sequence continues from the highest imported.
+
+---
+
+## 6. Core Features
+
+- **6.1 Find patient (primary):** search by name parts / phone / card number, partial
+  match. Results show the **card number prominently** + details to disambiguate.
+- **6.2 Register:** validated form; card number auto-assigned. **Duplicate warning** if
+  **either** (first+father+grandfather names match) **or** (phone matches) an existing
+  patient — matches shown, staff may still proceed.
+- **6.3 Edit:** any field except card number.
+- **6.4 Delete:** **soft delete** only — record hidden, recoverable, never erased (see §10).
+- **6.5 Print card:** print/reprint a label with card number + patient name, for
+  lost-card replacement.
+
+---
+
+## 7. Dates & Time
+
+- **DOB:** Ethiopian calendar (the only place EC is used).
+- **All system timestamps** (registered, created/modified, audit): **system clock date
+  & time**, not EC.
+
+---
+
+## 8. Login, Users & Encryption
+
+Two-tier permission model:
+
+| Capability | Staff | Admin |
+|---|---|---|
+| Search, register, edit, print card | ✅ | ✅ |
+| Soft-delete a patient | ✅ | ✅ |
+| View / restore / purge deleted patients | — | ✅ |
+| Excel import | — | ✅ |
+| Backup config, export, import/restore | — | ✅ |
+| Add / remove users, set roles | — | ✅ |
+| View audit log | — | ✅ |
+
+- Each user has their **own username + password**. Login required to open the app.
+- **Encryption:** one random master key encrypts the database (SQLCipher). The master
+  key is stored **wrapped under each user's password** — any user's password unlocks
+  the same data; adding a user wraps the key under their password, removing a user
+  deletes their wrapped copy. Data is never re-encrypted.
+- **First user is an Admin.** Setup prompts for a **second Admin**.
+- **Audit trail:** every register / edit / delete / restore / purge records **which user**
+  did it and when (system clock) — in the DB and in the external log (§15).
+- ✅ **Forgotten password is survivable** — another user can log in and re-create the
+  account. Data is only lost if **every** user loses their password.
+- ⚠️ **Keep at least two Admins** — only Admins manage users; if the sole Admin forgets
+  their password, no one can add/fix users (data still opens for others, but user
+  management is stuck).
+
+---
+
+## 9. Backup & Restore
+
+Three tiers — newest data always safe locally, off-machine copy on USB, off-site copy later.
+
+- **9.1 PC-local (always on):** `clinic_live.db` overwritten on **every save** + last
+  **5 daily** snapshots, in a backup folder on the PC's own disk. Works with or without USB.
+- **9.2 Designated USB:** set up **once** (recognized by **volume serial number** +
+  marker file `.clinic_backup`); auto-recognized afterward on any drive letter; mirrors
+  live + 5 daily when present. **Unknown USBs are ignored** (never writes patient data
+  to an unrecognized stick). If the backup USB is absent: **friendly, non-blocking
+  message** — *"USB backup paused — your backup USB isn't connected. Data is still saved
+  and backed up on this PC."* — auto-resumes when reconnected.
+- **9.3 Export:** write the encrypted DB file to any chosen folder/USB.
+- **9.4 Import/Restore:** select a backup file → **preview record count + confirm** →
+  replaces current data; **snapshots current DB first** so a wrong restore is reversible.
+  Requires the **same password** the backup was made with.
+- **9.5 Google Drive cloud backup:** deferred, **built last** — daily copy into the
+  owner's own free Google Drive Desktop folder. No code until local backup is done and
+  approved.
+
+All backups/exports are copies of the **already-encrypted** DB → encrypted automatically.
+
+---
+
+## 10. Soft Delete & Recovery
+
+- "Delete" **flags the record hidden**, it doesn't erase it — removed from searches/lists
+  but preserved underneath.
+- Staff can **soft-delete** (reversible). Only **Admin** can **view, restore, or
+  permanently purge** deleted records, via a **"Deleted patients"** screen.
+- Every delete/restore/purge is stamped with the user who did it.
+- Soft-deleted card numbers are **not reused**, keeping numbering aligned with the
+  physical drawer.
+
+---
+
+## 11. Data Import — existing data / Excel
+
+- Occasional one-time migration from **Excel (.xlsx) or CSV**.
+- **Admin-only**, tucked away in an Admin/Settings area, not on the main screen.
+- Column-mapping step + per-row validation (names, sex, phone). Bad rows **reported and
+  skipped**, not silently dropped.
+- **Keeps existing card numbers**; auto-sequence continues from the highest.
+
+---
+
+## 12. Patient-List Export
+
+- Human-readable **CSV/Excel** export of the patient list (separate from the encrypted
+  DB backup), for the clinic's own use.
+
+---
+
+## 13. Out of Scope
+
+Appointments, billing, prescriptions, clinical notes · any networking / multi-PC /
+remote access · analytics beyond the patient list · in-app cloud restore UI · any
+language other than English.
+
+---
+
+## 14. Assumptions & Risks
+
+- **Single PC = single point of failure** → mitigated by PC-local + USB backup (Google
+  later as off-site).
+- **All users lose passwords = data loss** (encryption has no backdoor; survivable as
+  long as one password is known).
+- **EC date conversion** depends on a third-party library's correctness.
+- **USB sticks can fail** → Google backup is the off-site complement later.
+
+---
+
+## 15. External Audit Log
+
+- A plain **`.txt` file, external to the database**, appended **one line per activity** —
+  readable without the app, and intact even if the DB has trouble.
+- **Format per line:** `system-timestamp | username | role | action | target`
+  (e.g. `2026-06-25 14:32:10 | meron | Staff | REGISTER | card 12/3`).
+- **Logged actions:** login (success + **failed**), logout, register, edit, soft-delete,
+  restore, purge, user add/remove, role change, Excel import, export, backup/restore,
+  USB connect/disconnect.
+- **Append-only**, never edited by the app. Lives in the app data folder and is
+  **mirrored to the USB/PC backup** like the DB.
+- 🔒 **Privacy:** because this file is **plaintext and unencrypted** (the point is it's
+  readable outside the app), it logs only **identifiers** — username, action, and
+  **card number** — **not** patient names, phone, or other personal data. The encrypted
+  DB stays the only place full patient info lives, so the audit log can't leak PHI if the
+  file is copied.
+
+---
+
+## Decision Log (summary of choices made)
+
+- Card numbering: `first/sub`, sub 0–8, first unbounded, starts `1/0`, auto-assigned,
+  never reused.
+- Dates: DOB in Ethiopian calendar; all system timestamps in system clock time.
+- Age: stored with record date, computed live, auto-increments.
+- Address: single free-text box + separate City field.
+- Phone: mandatory, non-unique, used for duplicate detection.
+- Language: English only.
+- Users: multiple, per-user passwords, two-tier (Admin / Staff).
+- Encryption: SQLCipher at rest, master key wrapped per user password.
+- Backup: PC-local (live + 5 daily) + designated USB (serial-recognized); export/import;
+  Google Drive last.
+- Audit: in-DB trail + external append-only `.txt` log (identifiers only).
