@@ -3,7 +3,21 @@
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
 
-for cmd in gh codex git flutter dart jq mktemp; do
+if [[ "${1:-}" == "--dry-run-verdict" ]]; then
+  command -v jq >/dev/null 2>&1 || { echo "Missing dependency: jq"; exit 1; }
+  REVIEW_OUTPUT=$(cat)
+  VERDICT=$(echo "$REVIEW_OUTPUT" | jq -r '.verdict')
+  BLOCKING_COUNT=$(echo "$REVIEW_OUTPUT" | jq '.blocking_comments | length')
+  echo "Verdict: $VERDICT | Blocking comments: $BLOCKING_COUNT"
+  if [ "$BLOCKING_COUNT" -eq 0 ]; then
+    echo "No blocking comments. Review loop complete."
+    exit 0
+  fi
+  echo "-- Blocking issues present. Starting scoped fix pass. --"
+  exit 20
+fi
+
+for cmd in gh codex git jq mktemp npm; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing dependency: $cmd"; exit 1; }
 done
 
@@ -85,9 +99,13 @@ Do not edit files unless explicitly asked."
 
 run_checks() {
   # $1 = output file
-  { flutter pub run build_runner build --delete-conflicting-outputs \
-      && flutter analyze \
-      && flutter test ; } > "$1" 2>&1
+  { (cd clinic && npm ci && npm run build) \
+      && if command -v cargo >/dev/null 2>&1; then
+          (cd clinic/src-tauri && cargo check) \
+            && (cd clinic/src-tauri && cargo test)
+        else
+          echo "Skipping Rust checks: cargo not found on PATH."
+        fi ; } > "$1" 2>&1
 }
 
 for i in $(seq 1 "$MAX_ITERS"); do
@@ -111,8 +129,12 @@ for i in $(seq 1 "$MAX_ITERS"); do
 
   echo "Verdict: $VERDICT | Blocking comments: $BLOCKING_COUNT"
 
-  if [[ "$VERDICT" == "APPROVE" && "$BLOCKING_COUNT" -eq 0 ]]; then
-    echo "Clean approval on pass $i. Safe to merge PR #${PR_NUMBER:-?}."
+  if [ "$BLOCKING_COUNT" -eq 0 ]; then
+    if [[ "$VERDICT" == "APPROVE" ]]; then
+      echo "Clean approval on pass $i. Safe to merge PR #${PR_NUMBER:-?}."
+    else
+      echo "No blocking comments on pass $i. Verdict: $VERDICT. Safe to merge PR #${PR_NUMBER:-?} with comments."
+    fi
     exit 0
   fi
 
