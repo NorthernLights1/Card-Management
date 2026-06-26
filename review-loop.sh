@@ -8,6 +8,7 @@
 #   ./review-loop.sh --dry-run-missing-test-allowlist-test
 #   ./review-loop.sh --dry-run-blocking-comment-allowlist-test
 #   ./review-loop.sh --dry-run-sandbox-gate
+#   ./review-loop.sh --dry-run-blocking-fix-sandbox-gate-test
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
 
@@ -41,6 +42,14 @@ validate_review_output_schema() {
 require_disposable_sandbox_for_pr_checks() {
   if [[ "${I_AM_IN_A_DISPOSABLE_SANDBOX:-}" != "1" ]]; then
     echo "Refusing to run PR-controlled package scripts outside a disposable sandbox."
+    echo "Set I_AM_IN_A_DISPOSABLE_SANDBOX=1 only inside an isolated disposable environment."
+    return 1
+  fi
+}
+
+require_disposable_sandbox_for_fix_pass() {
+  if [[ "${I_AM_IN_A_DISPOSABLE_SANDBOX:-}" != "1" ]]; then
+    echo "Refusing to run an automated fix pass outside a disposable sandbox."
     echo "Set I_AM_IN_A_DISPOSABLE_SANDBOX=1 only inside an isolated disposable environment."
     return 1
   fi
@@ -190,6 +199,7 @@ if [[ "${1:-}" == "--dry-run-verdict" ]]; then
     echo "Non-mergeable verdict has no actionable blocking comments."
     exit 2
   fi
+  require_disposable_sandbox_for_fix_pass
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   exit 20
 fi
@@ -203,16 +213,28 @@ if [[ "${1:-}" == "--dry-run-sandbox-gate" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "--dry-run-blocking-fix-sandbox-gate-test" ]]; then
+  BLOCKING_REVIEW='{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"review-loop.sh","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}'
+  OUTPUT=$(unset I_AM_IN_A_DISPOSABLE_SANDBOX; printf '%s\n' "$BLOCKING_REVIEW" | "$0" --dry-run-verdict 2>&1) && {
+    echo "Blocking fix dry-run did not fail closed outside a disposable sandbox."
+    exit 1
+  }
+  if grep -q "Starting scoped fix pass" <<< "$OUTPUT"; then
+    echo "Blocking fix dry-run reached the fix pass before enforcing the sandbox gate."
+    exit 1
+  fi
+  echo "Blocking fix pass fails closed before the fix command can run."
+  exit 0
+fi
+
 for cmd in gh codex git jq mktemp npm; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Missing dependency: $cmd"; exit 1; }
 done
 
 if [[ "${I_AM_IN_A_DISPOSABLE_SANDBOX:-}" == "1" ]]; then
   CODEX_EXEC_SANDBOX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
-  CODEX_RESUME_SANDBOX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
 else
   CODEX_EXEC_SANDBOX_ARGS=(--sandbox workspace-write)
-  CODEX_RESUME_SANDBOX_ARGS=(-c 'sandbox_mode="workspace-write"')
 fi
 
 if [ -n "$(git status --porcelain)" ]; then
@@ -294,6 +316,7 @@ Do not edit files unless explicitly asked."
 run_checks() {
   # $1 = output file
   require_disposable_sandbox_for_pr_checks > "$1" 2>&1 || return $?
+  command -v cargo >/dev/null 2>&1 || { echo "Missing dependency: cargo" >> "$1"; return 1; }
 
   if [[ "${ALLOW_NPM_INSTALL_SCRIPTS:-}" == "1" ]]; then
     NPM_CI_ARGS=(ci)
@@ -301,13 +324,11 @@ run_checks() {
     NPM_CI_ARGS=(ci --ignore-scripts)
   fi
 
+  export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+
   { (cd clinic && npm "${NPM_CI_ARGS[@]}" && npm run build && npm exec -- vitest run) \
-      && if command -v cargo >/dev/null 2>&1; then
-          (cd clinic/src-tauri && cargo check) \
-            && (cd clinic/src-tauri && cargo test)
-        else
-          echo "Skipping Rust checks: cargo not found on PATH."
-        fi ; } > "$1" 2>&1
+      && (cd clinic/src-tauri && cargo check) \
+      && (cd clinic/src-tauri && cargo test) ; } >> "$1" 2>&1
 }
 
 for i in $(seq 1 "$MAX_ITERS"); do
@@ -375,6 +396,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
     exit 1
   fi
 
+  require_disposable_sandbox_for_fix_pass
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   BLOCKING_JSON=$(jq '.blocking_comments' "$REVIEW_JSON")
   echo "$BLOCKING_JSON" | validate_blocking_comment_file_paths
@@ -405,23 +427,10 @@ Add only the ones that directly cover the blocking issues above. Ignore the rest
   fi
 
   if [ "$CHECK_STATUS" -ne 0 ]; then
-    echo "Fix broke verification. Feeding last 200 lines of real output back to the same fix session."
-    tail -n 200 "$CHECK_LOG" | codex exec resume --last "${CODEX_RESUME_SANDBOX_ARGS[@]}" \
-      "Your fix broke verification. Here is the real output (last 200 lines) above. Fix the root cause without reintroducing the blocking issue you just fixed." \
-      || { echo "Codex resume fix pass failed."; exit 1; }
-
-    echo "-- Re-running real checks after resume fix --"
-    if run_checks "$CHECK_LOG"; then
-      CHECK_STATUS=0
-    else
-      CHECK_STATUS=$?
-    fi
-
-    if [ "$CHECK_STATUS" -ne 0 ]; then
-      echo "Verification still fails after resume fix. Last 200 lines:"
-      tail -n 200 "$CHECK_LOG"
-      exit "$CHECK_STATUS"
-    fi
+    echo "Fix broke verification. Check log: $CHECK_LOG"
+    echo "Last 200 lines:"
+    tail -n 200 "$CHECK_LOG" || true
+    exit "$CHECK_STATUS"
   fi
 
   echo "-- Committing fix before re-review --"
