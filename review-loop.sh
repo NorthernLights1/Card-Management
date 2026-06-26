@@ -6,6 +6,7 @@
 #   printf '%s\n' 'not json' | ./review-loop.sh --dry-run-verdict
 #   ./review-loop.sh --dry-run-verdict-schema-test
 #   ./review-loop.sh --dry-run-missing-test-allowlist-test
+#   ./review-loop.sh --dry-run-blocking-comment-allowlist-test
 #   ./review-loop.sh --dry-run-sandbox-gate
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
@@ -61,11 +62,22 @@ validate_allowed_fix_paths() {
   local path
 
   for path in "$@"; do
-    if [[ -z "$path" || "$path" == /* || "$path" == *'..'* ]]; then
+    if [[ -z "$path" || "$path" == /* || "$path" == *'..'* || "$path" =~ [[:cntrl:]] || ! "$path" =~ ^[A-Za-z0-9._/@+-]+$ ]]; then
       echo "Blocking comment has an unsafe file path: $path"
       exit 1
     fi
   done
+}
+
+validate_blocking_comment_file_paths() {
+  jq -e '
+    all(.[]; .file
+      | type == "string"
+      and (explode | all(. > 31 and . != 127))
+      and test("^[A-Za-z0-9._/@+-]+$")
+      and (startswith("/") | not)
+      and (contains("..") | not))
+  ' >/dev/null
 }
 
 ensure_only_allowed_files_changed() {
@@ -142,6 +154,18 @@ if [[ "${1:-}" == "--dry-run-missing-test-allowlist-test" ]]; then
     ensure_only_allowed_files_changed "${ALLOWED_FIX_PATHS[@]}"
   )
   echo "Missing-test paths are accepted by the fix allowlist."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--dry-run-blocking-comment-allowlist-test" ]]; then
+  command -v jq >/dev/null 2>&1 || { echo "Missing dependency: jq"; exit 1; }
+  REVIEW_OUTPUT=$'{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"src/app.ts\\npackage.json","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}'
+  BLOCKING_JSON=$(printf '%s\n' "$REVIEW_OUTPUT" | jq '.blocking_comments')
+  if echo "$BLOCKING_JSON" | validate_blocking_comment_file_paths; then
+    echo "Blocking comment path allowlist accepted an embedded newline."
+    exit 1
+  fi
+  echo "Blocking comment path allowlist rejects embedded newlines."
   exit 0
 fi
 
@@ -277,7 +301,7 @@ run_checks() {
     NPM_CI_ARGS=(ci --ignore-scripts)
   fi
 
-  { (cd clinic && npm "${NPM_CI_ARGS[@]}" && npm run build) \
+  { (cd clinic && npm "${NPM_CI_ARGS[@]}" && npm run build && npm exec -- vitest run) \
       && if command -v cargo >/dev/null 2>&1; then
           (cd clinic/src-tauri && cargo check) \
             && (cd clinic/src-tauri && cargo test)
@@ -336,6 +360,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
 
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   BLOCKING_JSON=$(jq '.blocking_comments' "$REVIEW_JSON")
+  echo "$BLOCKING_JSON" | validate_blocking_comment_file_paths
   mapfile -t ALLOWED_FIX_PATHS < <(echo "$BLOCKING_JSON" | jq -r '.[].file' | sort -u)
   mapfile -t MISSING_TEST_PATHS < <(jq '.' "$REVIEW_JSON" | extract_missing_test_paths)
   ALLOWED_FIX_PATHS+=("${MISSING_TEST_PATHS[@]}")
