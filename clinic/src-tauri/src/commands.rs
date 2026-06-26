@@ -451,3 +451,11 @@ pub fn read_audit_log(state: State<AppState>) -> Result<String, String> {
     let start = lines.len().saturating_sub(300); // most recent 300 entries
     Ok(lines[start..].join("\n"))
 }
+
+#[tauri::command]
+pub fn get_patient_stats(state: State<AppState>) -> Result<patient::PatientStats, String> {
+    require_admin(&state)?;
+    let guard = state.active.lock().unwrap();
+    let active = guard.as_ref().ok_or("Not logged in")?;
+    patient::get_stats(&active.conn).map_err(|e| e.to_string())
+}

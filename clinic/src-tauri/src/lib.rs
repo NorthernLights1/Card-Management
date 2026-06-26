@@ -52,6 +52,7 @@ pub fn run() {
             commands::import_preview,
             commands::import_apply,
             commands::export_patient_csv,
+            commands::get_patient_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

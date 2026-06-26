@@ -80,6 +80,31 @@ Changes made after Phase 8 delivery in response to client review:
   password" button in the Users section of SettingsScreen, `ResetPasswordModal` component.
   Audited as `PASSWORD_RESET` in the audit log.
 
+### Settings screen, Reports screen, Reception role (2026-06-26)
+- **Settings screen** (`SettingsScreen.tsx`): accessible to all users. Contains change-own-password
+  section (all roles) and user management section (Admin only — add, reset, remove). Replaces the
+  old change-password modal that lived in `App.tsx` and the user management block that was embedded
+  in the old Backups screen.
+- **Backups screen** (`BackupsScreen.tsx`): new file containing the former `SettingsScreen.tsx`
+  content (USB backup, export, restore, import, activity log) with user management removed.
+- **Reports screen** (`ReportsScreen.tsx`): Admin-only. Tier 1 — overview stat boxes (total,
+  this month, this year). Tier 2 — sex breakdown bar, top-10 cities table.
+- **Rust `get_patient_stats` command**: added `PatientStats` + `CityCount` structs and `get_stats()`
+  to `patient.rs`; wired up as a Tauri command in `commands.rs` / `lib.rs`.
+- **Reception role label**: internal value stays `"Staff"`; displayed as "Reception" in all UI
+  dropdowns and role badges via inline mapping.
+
+| File | Change |
+|---|---|
+| `src/App.tsx` | New nav (Settings/Reports/Backups), new view types, removed change-pw modal |
+| `src/components/SettingsScreen.tsx` | Rewritten — change password + user management |
+| `src/components/BackupsScreen.tsx` | New — backup content split out from old SettingsScreen |
+| `src/components/ReportsScreen.tsx` | New — overview counts + demographics |
+| `src/lib/api.ts` | Added `PatientStats`, `CityCount` types + `getPatientStats()` |
+| `src-tauri/src/patient.rs` | Added `get_stats()`, `PatientStats`, `CityCount` |
+| `src-tauri/src/commands.rs` | Added `get_patient_stats` command |
+| `src-tauri/src/lib.rs` | Registered `get_patient_stats` |
+
 ### Ethiopian calendar DOB picker (2026-06-26)
 - `EcDateInput` component rewritten as a proper calendar grid: month-name header
   with ← / → navigation, year number input, Su–Sa weekday columns, clickable day

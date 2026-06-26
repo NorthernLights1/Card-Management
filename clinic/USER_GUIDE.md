@@ -51,27 +51,33 @@ A single-PC, offline desktop app for managing patient cards. All data is stored
 
 ## Roles
 
-| Action | Staff | Admin |
+| Action | Reception | Admin |
 |---|---|---|
 | Search, register, edit, print, delete (hide) | ✅ | ✅ |
-| Change own password | ✅ | ✅ |
+| Change own password (Settings) | ✅ | ✅ |
 | Restore / permanently delete patients | — | ✅ |
-| Reset any user's password | — | ✅ |
-| Manage users, backups, import/export | — | ✅ |
-| View the activity log | — | ✅ |
+| Reset any user's password (Settings) | — | ✅ |
+| Manage users (Settings) | — | ✅ |
+| Backups, import/export (Backups) | — | ✅ |
+| View reports (Reports) | — | ✅ |
+| View the activity log (Backups) | — | ✅ |
 
 ---
 
-## Users (Admin → **Backups → Users**)
+## Settings (header → **Settings**)
 
-- **Add a user:** click **+ Add user**, enter a username, password, and role (Staff or
-  Admin).
-- **Reset a user's password:** click **Reset password** next to any user. Enter and
-  confirm a new password. The user can log in with the new password immediately.
-- **Remove a user:** click **Remove** next to any user (you cannot remove yourself).
-  The last Admin cannot be removed.
-- **Change your own password:** click **Change password** in the app header (available
-  to all roles).
+Available to all users:
+- **Change your own password:** click **Change password…** and enter your current and new password.
+
+Admin-only:
+- **Add a user:** click **+ Add user**, enter a username, password, and role (Reception or Admin).
+- **Reset a user's password:** click **Reset password** next to any user. The user can log in with the new password immediately.
+- **Remove a user:** click **Remove** next to any user (you cannot remove yourself). The last Admin cannot be removed.
+
+## Reports (Admin → **Reports**)
+
+- **Overview:** total active patients, registered this month, registered this year.
+- **Demographics:** male/female breakdown with a visual bar; top cities ranked by patient count.
 
 ## Backups (Admin → **Backups**)
 

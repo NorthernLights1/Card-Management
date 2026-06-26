@@ -1,6 +1,6 @@
 # Feature Contract — Clinic Card Management System
 
-**Version:** 5.1 (approved) · **Date:** 2026-06-26
+**Version:** 5.2 (approved) · **Date:** 2026-06-26
 
 ---
 
@@ -72,6 +72,13 @@ compute from the EC DOB the same way.
   patient — matches shown, staff may still proceed.
 - **6.3 Edit:** any field except card number. Field order in the form: names, sex, phone,
   age/DOB, **city**, address.
+- **6.6 Settings screen:** accessible to all users. Contains "Change password" (all roles) and
+  "Users" section (Admin only — add, reset, remove users).
+- **6.7 Backups screen:** Admin only. Contains USB backup, export/restore, import from
+  Excel/CSV, export patient list, and activity log.
+- **6.8 Reports screen:** Admin only. Overview tier: total patients, registered this month,
+  registered this year. Demographics tier: male/female counts with visual bar, top-10 cities
+  by patient count.
 - **6.4 Delete:** **soft delete** only — record hidden, recoverable, never erased (see §10).
 - **6.5 Print card:** print/reprint a label with card number + patient name, for
   lost-card replacement.
@@ -90,16 +97,16 @@ compute from the EC DOB the same way.
 
 Two-tier permission model:
 
-| Capability | Staff | Admin |
+| Capability | Reception | Admin |
 |---|---|---|
 | Search, register, edit, print card | ✅ | ✅ |
 | Soft-delete a patient | ✅ | ✅ |
-| Change own password | ✅ | ✅ |
+| Change own password (via Settings) | ✅ | ✅ |
 | View / restore / purge deleted patients | — | ✅ |
 | Excel import | — | ✅ |
-| Backup config, export, import/restore | — | ✅ |
-| Add / remove users, set roles | — | ✅ |
-| Reset any user's password | — | ✅ |
+| Backup config, export, import/restore (Backups screen) | — | ✅ |
+| Add / remove users, reset passwords (Settings screen) | — | ✅ |
+| View reports | — | ✅ |
 | View audit log | — | ✅ |
 
 - Each user has their **own username + password**. Login required to open the app.
@@ -230,6 +237,12 @@ language other than English.
   the target user — no old password needed.
 - Home screen: all-patients view (not search-first) with live count and Sex/City filters.
   City filter dynamically populated from database values. Search narrows the same list.
+- Role display label: internal value remains "Staff" (stored in auth.json); displayed as
+  "Reception" in all UI surfaces.
+- Settings screen: user management (add/reset/remove) + change-own-password, separated from
+  the Backups screen. Settings accessible to all roles; Users section Admin-only.
+- Reports screen: Admin-only. Tier 1 (counts) + Tier 2 (demographics). Tier 3 (visit
+  patterns) deferred until date-of-visit feature is built.
 - Backup: PC-local (live + 5 daily) + designated USB (serial-recognized); export/import;
   Google Drive last.
 - Audit: in-DB trail + external append-only `.txt` log (identifiers only).

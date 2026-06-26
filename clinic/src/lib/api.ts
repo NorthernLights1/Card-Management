@@ -130,3 +130,16 @@ export const restorePatient = (id: number) =>
 
 export const purgePatient = (id: number) =>
   invoke<void>("purge_patient", { id });
+
+// --- reports (Admin only) ---
+export type CityCount = { city: string; count: number };
+export type PatientStats = {
+  total: number;
+  registered_this_month: number;
+  registered_this_year: number;
+  male: number;
+  female: number;
+  cities: CityCount[];
+};
+
+export const getPatientStats = () => invoke<PatientStats>("get_patient_stats");

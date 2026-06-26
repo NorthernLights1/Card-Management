@@ -779,3 +779,78 @@ mod tests {
         assert_eq!(next.card_number, "5/2");
     }
 }
+
+// ── Stats / Reports ──────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize)]
+pub struct CityCount {
+    pub city: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PatientStats {
+    pub total: i64,
+    pub registered_this_month: i64,
+    pub registered_this_year: i64,
+    pub male: i64,
+    pub female: i64,
+    pub cities: Vec<CityCount>,
+}
+
+pub fn get_stats(conn: &Connection) -> rusqlite::Result<PatientStats> {
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted = 0",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let registered_this_month: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted = 0 \
+         AND strftime('%Y-%m', registered_at) = strftime('%Y-%m', 'now')",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let registered_this_year: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted = 0 \
+         AND strftime('%Y', registered_at) = strftime('%Y', 'now')",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let male: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted = 0 AND sex = 'Male'",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let female: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted = 0 AND sex = 'Female'",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(NULLIF(TRIM(city), ''), 'Unknown') as city, COUNT(*) as cnt \
+         FROM patients WHERE deleted = 0 \
+         GROUP BY city ORDER BY cnt DESC LIMIT 10",
+    )?;
+    let cities = stmt
+        .query_map([], |r| {
+            Ok(CityCount {
+                city: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(PatientStats {
+        total,
+        registered_this_month,
+        registered_this_year,
+        male,
+        female,
+        cities,
+    })
+}
