@@ -800,40 +800,40 @@ pub struct PatientStats {
 
 pub fn get_stats(conn: &Connection) -> rusqlite::Result<PatientStats> {
     let total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM patients WHERE deleted = 0",
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL",
         [],
         |r| r.get(0),
     )?;
 
     let registered_this_month: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM patients WHERE deleted = 0 \
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL \
          AND strftime('%Y-%m', registered_at) = strftime('%Y-%m', 'now')",
         [],
         |r| r.get(0),
     )?;
 
     let registered_this_year: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM patients WHERE deleted = 0 \
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL \
          AND strftime('%Y', registered_at) = strftime('%Y', 'now')",
         [],
         |r| r.get(0),
     )?;
 
     let male: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM patients WHERE deleted = 0 AND sex = 'Male'",
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL AND sex = 'Male'",
         [],
         |r| r.get(0),
     )?;
 
     let female: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM patients WHERE deleted = 0 AND sex = 'Female'",
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL AND sex = 'Female'",
         [],
         |r| r.get(0),
     )?;
 
     let mut stmt = conn.prepare(
         "SELECT COALESCE(NULLIF(TRIM(city), ''), 'Unknown') as city, COUNT(*) as cnt \
-         FROM patients WHERE deleted = 0 \
+         FROM patients WHERE deleted_at IS NULL \
          GROUP BY city ORDER BY cnt DESC LIMIT 10",
     )?;
     let cities = stmt

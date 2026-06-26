@@ -36,9 +36,8 @@ A single-PC, offline desktop app for managing patient cards. All data is stored
 - **Register a patient:** click **+ Register patient**, fill the form. The app assigns
   the next card number automatically. If a name or phone already exists, you'll see a
   duplicate warning — continue only if it's truly a different person.
-- **Edit / Delete:** on any row. Deleting only **hides** the record — an Admin can
-  restore it from **Deleted patients**.
-- **Print a card:** click **Print card** on any row.
+- **Edit / Delete:** on any row. Deleting only **hides** the record — anyone can
+  restore it from **Deleted patients**. Only Admins can permanently purge.
 
 ### Ages and dates
 - When you choose **"Date of birth (Ethiopian calendar)"**, a calendar grid opens
@@ -53,9 +52,10 @@ A single-PC, offline desktop app for managing patient cards. All data is stored
 
 | Action | Reception | Admin |
 |---|---|---|
-| Search, register, edit, print, delete (hide) | ✅ | ✅ |
+| Search, register, edit, delete (hide) | ✅ | ✅ |
 | Change own password (Settings) | ✅ | ✅ |
-| Restore / permanently delete patients | — | ✅ |
+| View / restore deleted patients | ✅ | ✅ |
+| Permanently purge deleted patients | — | ✅ |
 | Reset any user's password (Settings) | — | ✅ |
 | Manage users (Settings) | — | ✅ |
 | Backups, import/export (Backups) | — | ✅ |

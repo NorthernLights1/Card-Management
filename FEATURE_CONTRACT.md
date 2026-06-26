@@ -80,8 +80,7 @@ compute from the EC DOB the same way.
   registered this year. Demographics tier: male/female counts with visual bar, top-10 cities
   by patient count.
 - **6.4 Delete:** **soft delete** only — record hidden, recoverable, never erased (see §10).
-- **6.5 Print card:** print/reprint a label with card number + patient name, for
-  lost-card replacement.
+- **6.5 Print card:** ~~removed~~ — clinic uses pre-printed cards that do not feed into a printer.
 
 ---
 
@@ -99,10 +98,11 @@ Two-tier permission model:
 
 | Capability | Reception | Admin |
 |---|---|---|
-| Search, register, edit, print card | ✅ | ✅ |
+| Search, register, edit | ✅ | ✅ |
 | Soft-delete a patient | ✅ | ✅ |
 | Change own password (via Settings) | ✅ | ✅ |
-| View / restore / purge deleted patients | — | ✅ |
+| View / restore deleted patients | ✅ | ✅ |
+| Permanently purge deleted patients | — | ✅ |
 | Excel import | — | ✅ |
 | Backup config, export, import/restore (Backups screen) | — | ✅ |
 | Add / remove users, reset passwords (Settings screen) | — | ✅ |

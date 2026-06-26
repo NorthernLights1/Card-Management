@@ -6,10 +6,9 @@ import { displayAge, displayDob, fullName } from "../lib/patientView";
 type Props = {
   onRegister: () => void;
   onEdit: (patient: Patient) => void;
-  onPrint: (patient: Patient) => void;
 };
 
-export function SearchScreen({ onRegister, onEdit, onPrint }: Props) {
+export function SearchScreen({ onRegister, onEdit }: Props) {
   const [allPatients, setAllPatients] = useState<Patient[]>([]);
   const [searchResults, setSearchResults] = useState<Patient[] | null>(null);
   const [query, setQuery] = useState("");
@@ -63,14 +62,6 @@ export function SearchScreen({ onRegister, onEdit, onPrint }: Props) {
   return (
     <>
       <div className="toolbar">
-        <div className="search">
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name, phone, or card number…"
-            autoFocus
-          />
-        </div>
         <select value={sexFilter} onChange={(e) => setSexFilter(e.target.value as "" | Sex)}>
           <option value="">All sexes</option>
           <option value="Male">Male</option>
@@ -82,9 +73,18 @@ export function SearchScreen({ onRegister, onEdit, onPrint }: Props) {
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
+        <div style={{ flex: 1 }} />
         <button className="primary" onClick={onRegister}>
           + Register patient
         </button>
+      </div>
+      <div className="search">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name, phone, or card number…"
+          autoFocus
+        />
       </div>
 
       {error && <div className="banner error">{error}</div>}
@@ -111,7 +111,6 @@ export function SearchScreen({ onRegister, onEdit, onPrint }: Props) {
               </div>
             </div>
             <div className="result-actions">
-              <button onClick={() => onPrint(p)}>Print card</button>
               <button onClick={() => onEdit(p)}>Edit</button>
               <button className="danger" onClick={() => remove(p)}>
                 Delete

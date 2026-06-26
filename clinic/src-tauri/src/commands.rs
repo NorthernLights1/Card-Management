@@ -288,15 +288,12 @@ pub fn check_duplicates(
     patient::find_duplicates(&active.conn, &input)
 }
 
-// --- deleted patients (Admin only) -----------------------------------------
+// --- deleted patients (list + restore: any role; purge: Admin only) ---------
 
 #[tauri::command]
 pub fn list_deleted_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
-    if active.session.role != Role::Admin {
-        return Err("This action requires an Admin".into());
-    }
     patient::list_deleted(&active.conn)
 }
 
@@ -304,12 +301,10 @@ pub fn list_deleted_patients(state: State<AppState>) -> Result<Vec<Patient>, Str
 pub fn restore_patient(state: State<AppState>, id: i64) -> Result<(), String> {
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
-    if active.session.role != Role::Admin {
-        return Err("This action requires an Admin".into());
-    }
     let actor = active.session.username.clone();
+    let role = role_str(active.session.role);
     patient::restore(&active.conn, id)?;
-    state.audit(&actor, "Admin", "RESTORE_PATIENT", &patient::card_of(&active.conn, id));
+    state.audit(&actor, role, "RESTORE_PATIENT", &patient::card_of(&active.conn, id));
     state.run_backups(&active.conn);
     Ok(())
 }

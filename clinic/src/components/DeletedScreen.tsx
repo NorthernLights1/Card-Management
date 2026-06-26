@@ -3,9 +3,9 @@ import type { Patient } from "../lib/api";
 import { listDeletedPatients, purgePatient, restorePatient } from "../lib/api";
 import { displayAge, fullName } from "../lib/patientView";
 
-type Props = { onBack: () => void };
+type Props = { onBack: () => void; isAdmin: boolean };
 
-export function DeletedScreen({ onBack }: Props) {
+export function DeletedScreen({ onBack, isAdmin }: Props) {
   const [rows, setRows] = useState<Patient[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,9 +67,11 @@ export function DeletedScreen({ onBack }: Props) {
               <button className="primary" onClick={() => restore(p)}>
                 Restore
               </button>
-              <button className="danger" onClick={() => purge(p)}>
-                Delete forever
-              </button>
+              {isAdmin && (
+                <button className="danger" onClick={() => purge(p)}>
+                  Delete forever
+                </button>
+              )}
             </div>
           </div>
         ))

@@ -90,9 +90,10 @@ label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 
 .app-header nav { display: flex; gap: 8px; align-items: center; }
 .app-main { max-width: 920px; margin: 0 auto; padding: 24px 22px 64px; }
 
-.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 18px; }
-.toolbar .search { flex: 1; }
-.toolbar .search input { font-size: 16px; padding: 12px 14px; }
+.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.toolbar select { width: auto; }
+.search { max-width: 600px; margin: 0 auto 18px; }
+.search input { font-size: 16px; padding: 12px 14px; }
 
 /* --- result rows --- */
 .result-row {

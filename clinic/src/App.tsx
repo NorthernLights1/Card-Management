@@ -10,7 +10,6 @@ import { DeletedScreen } from "./components/DeletedScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { BackupsScreen } from "./components/BackupsScreen";
 import { ReportsScreen } from "./components/ReportsScreen";
-import { PrintCard } from "./components/PrintCard";
 
 type Phase = "loading" | "setup" | "login" | "app";
 type View =
@@ -26,21 +25,12 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [user, setUser] = useState<UserInfo | null>(null);
   const [view, setView] = useState<View>({ name: "search" });
-  const [printing, setPrinting] = useState<Patient | null>(null);
 
   useEffect(() => {
     isInitialized()
       .then((ready) => setPhase(ready ? "login" : "setup"))
       .catch(() => setPhase("login"));
   }, []);
-
-  useEffect(() => {
-    if (!printing) return;
-    const after = () => setPrinting(null);
-    window.addEventListener("afterprint", after);
-    window.print();
-    return () => window.removeEventListener("afterprint", after);
-  }, [printing]);
 
   const enterApp = (u: UserInfo) => {
     setUser(u);
@@ -65,7 +55,10 @@ export default function App() {
       <header className="app-header">
         <span className="brand">Clinic Card Management</span>
         <nav>
-          {isAdmin && view.name !== "deleted" && (
+          {view.name !== "search" && view.name !== "register" && view.name !== "edit" && (
+            <button className="ghost" onClick={() => setView({ name: "search" })}>Patients</button>
+          )}
+          {view.name !== "deleted" && (
             <button className="ghost" onClick={() => setView({ name: "deleted" })}>Deleted patients</button>
           )}
           {isAdmin && view.name !== "reports" && (
@@ -88,11 +81,10 @@ export default function App() {
           <SearchScreen
             onRegister={() => setView({ name: "register" })}
             onEdit={(patient) => setView({ name: "edit", patient })}
-            onPrint={(patient) => setPrinting(patient)}
           />
         )}
         {view.name === "deleted" && (
-          <DeletedScreen onBack={() => setView({ name: "search" })} />
+          <DeletedScreen onBack={() => setView({ name: "search" })} isAdmin={isAdmin} />
         )}
         {view.name === "settings" && (
           <SettingsScreen user={user!} onBack={() => setView({ name: "search" })} />
@@ -121,7 +113,6 @@ export default function App() {
           />
         )}
       </main>
-      {printing && <PrintCard patient={printing} />}
     </>
   );
 }
