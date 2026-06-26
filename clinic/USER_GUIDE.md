@@ -13,11 +13,14 @@ A single-PC, offline desktop app for managing patient cards. All data is stored
 
 ## ⚠️ Most important things to know
 
-- **There is no password recovery.** The patient database is encrypted with the
-  passwords. If **every** user forgets their password, the data **cannot** be
-  recovered by anyone. Write the passwords down and keep them somewhere safe.
-- **Keep at least two Admins.** Only Admins can manage users. If your only Admin
-  forgets their password, no one can add or fix accounts. Two Admins removes this risk.
+- **Admins can reset any user's password.** If a Staff member forgets their password,
+  any Admin can reset it from **Backups → Users → Reset password** — no old password
+  required.
+- **If every Admin loses their password, user management is blocked.** The database
+  can still be opened by Staff, but no one can add or fix Admin accounts. Two Admins
+  removes this risk entirely.
+- **If every single user loses their password, data is unrecoverable.** The database is
+  fully encrypted. Write passwords down and keep them somewhere safe.
 - **This is one computer.** If the PC fails, your only copies are the backups.
   Set up the USB backup (below), and keep the stick somewhere safe.
 
@@ -25,18 +28,24 @@ A single-PC, offline desktop app for managing patient cards. All data is stored
 
 ## Daily use
 
-- **Find a patient:** type their name, phone, or card number in the search box.
-  The big number on the left is their **card number** — use it to pull the paper file.
+- **Home screen:** when you log in, all patients are listed in card-number order with a
+  count at the top. Use the **Sex** and **City** dropdowns to filter. Type in the search
+  box to narrow by name, phone, or card number.
+- **Find a patient:** the big number on the left of each row is their **card number** —
+  use it to pull the paper file.
 - **Register a patient:** click **+ Register patient**, fill the form. The app assigns
   the next card number automatically. If a name or phone already exists, you'll see a
   duplicate warning — continue only if it's truly a different person.
-- **Edit / Delete:** on a search result. Deleting only **hides** the record — an Admin
-  can restore it from **Deleted patients**.
-- **Print a card:** click **Print card** on a search result.
+- **Edit / Delete:** on any row. Deleting only **hides** the record — an Admin can
+  restore it from **Deleted patients**.
+- **Print a card:** click **Print card** on any row.
 
 ### Ages and dates
-- Enter a **date of birth** in the **Ethiopian calendar**, or just an **age** if the
-  DOB is unknown. Ages shown in the app update automatically as years pass.
+- When you choose **"Date of birth (Ethiopian calendar)"**, a calendar grid opens
+  showing the month by name with weekday columns (Su–Sa). Use the **←** / **→**
+  buttons to navigate months, type directly in the **year field**, then click the day.
+- If the DOB is unknown, choose **"Age only"** and enter the age in years.
+- Ages shown in the app update automatically as years pass — no manual adjustment needed.
 
 ---
 
@@ -45,11 +54,24 @@ A single-PC, offline desktop app for managing patient cards. All data is stored
 | Action | Staff | Admin |
 |---|---|---|
 | Search, register, edit, print, delete (hide) | ✅ | ✅ |
+| Change own password | ✅ | ✅ |
 | Restore / permanently delete patients | — | ✅ |
+| Reset any user's password | — | ✅ |
 | Manage users, backups, import/export | — | ✅ |
 | View the activity log | — | ✅ |
 
 ---
+
+## Users (Admin → **Backups → Users**)
+
+- **Add a user:** click **+ Add user**, enter a username, password, and role (Staff or
+  Admin).
+- **Reset a user's password:** click **Reset password** next to any user. Enter and
+  confirm a new password. The user can log in with the new password immediately.
+- **Remove a user:** click **Remove** next to any user (you cannot remove yourself).
+  The last Admin cannot be removed.
+- **Change your own password:** click **Change password** in the app header (available
+  to all roles).
 
 ## Backups (Admin → **Backups**)
 

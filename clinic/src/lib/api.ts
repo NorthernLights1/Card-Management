@@ -61,6 +61,9 @@ export const listUsers = () => invoke<UserInfo[]>("list_users");
 export const changePassword = (oldPassword: string, newPassword: string) =>
   invoke<void>("change_password", { oldPassword, newPassword });
 
+export const resetUserPassword = (username: string, newPassword: string) =>
+  invoke<void>("reset_user_password", { username, newPassword });
+
 // --- patients ---
 export const registerPatient = (input: PatientInput) =>
   invoke<Patient>("register_patient", { input });
@@ -70,6 +73,8 @@ export const updatePatient = (id: number, input: PatientInput) =>
 
 export const deletePatient = (id: number) =>
   invoke<void>("delete_patient", { id });
+
+export const listPatients = () => invoke<Patient[]>("list_patients");
 
 export const searchPatients = (query: string) =>
   invoke<Patient[]>("search_patients", { query });

@@ -159,6 +159,24 @@ impl AuthStore {
         self.save()
     }
 
+    /// Admin action: reset another user's password without knowing their current one.
+    /// Uses the master key already in session memory to re-wrap under the new password.
+    pub fn reset_user_password(
+        &mut self,
+        master_key: &[u8; KEY_LEN],
+        username: &str,
+        new_password: &str,
+    ) -> Result<(), String> {
+        if new_password.len() < 4 {
+            return Err("New password is too short".into());
+        }
+        let user = self.find(username).ok_or_else(|| "User not found".to_string())?;
+        let role = user.role;
+        self.users.retain(|u| u.username != username);
+        self.insert_user(username, new_password, role, master_key)?;
+        self.save()
+    }
+
     pub fn list_users(&self) -> Vec<(String, Role)> {
         self.users
             .iter()

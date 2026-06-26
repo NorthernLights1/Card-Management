@@ -289,6 +289,17 @@ pub fn list_deleted(conn: &Connection) -> Result<Vec<Patient>, String> {
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
 }
 
+/// List all active patients ordered by card number (home screen view).
+pub fn list_all(conn: &Connection) -> Result<Vec<Patient>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL ORDER BY card_first, card_sub LIMIT 5000"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt.query_map([], row_to_patient).map_err(e2s)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
 // --- reads ------------------------------------------------------------------
 
 /// Card number for a patient id (regardless of deleted state) — for the audit log.

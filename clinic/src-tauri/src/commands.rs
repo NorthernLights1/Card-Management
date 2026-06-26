@@ -186,6 +186,19 @@ pub fn list_users(state: State<AppState>) -> Result<Vec<UserInfo>, String> {
 }
 
 #[tauri::command]
+pub fn reset_user_password(
+    state: State<AppState>,
+    username: String,
+    new_password: String,
+) -> Result<(), String> {
+    let (actor, master) = require_admin(&state)?;
+    let mut store = AuthStore::load(&state.auth_path())?;
+    store.reset_user_password(&master, &username, &new_password)?;
+    state.audit(&actor, "Admin", "PASSWORD_RESET", &username);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn change_password(
     state: State<AppState>,
     old_password: String,
@@ -242,6 +255,13 @@ pub fn delete_patient(state: State<AppState>, id: i64) -> Result<(), String> {
     state.audit(&actor, role_str(role), "DELETE", &patient::card_of(&active.conn, id));
     state.run_backups(&active.conn);
     Ok(())
+}
+
+#[tauri::command]
+pub fn list_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
+    let guard = state.active.lock().unwrap();
+    let active = guard.as_ref().ok_or("Not logged in")?;
+    patient::list_all(&active.conn)
 }
 
 #[tauri::command]

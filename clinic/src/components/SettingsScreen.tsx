@@ -9,6 +9,7 @@ import {
   listUsers,
   readAuditLog,
   removeUser,
+  resetUserPassword,
   restoreApply,
   restorePreview,
   setUsbBackup,
@@ -33,6 +34,7 @@ export function SettingsScreen({ user, onBack, onRestored }: Props) {
   const [users, setUsers] = useState<UserInfo[] | null>(null);
   const [showAddUser, setShowAddUser] = useState(false);
   const [addForm, setAddForm] = useState({ username: "", password: "", role: "Staff" as Role });
+  const [resetTarget, setResetTarget] = useState<string | null>(null);
 
   const loadUsb = () => usbStatus().then(setUsb).catch((e) => setError(String(e)));
   const loadUsers = () => listUsers().then(setUsers).catch((e) => setError(String(e)));
@@ -152,11 +154,16 @@ export function SettingsScreen({ user, onBack, onRestored }: Props) {
                 )}
                 <div className="result-meta">{u.role}</div>
               </div>
-              {u.username !== user.username && (
-                <button className="danger" onClick={() => doRemoveUser(u.username)}>
-                  Remove
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="ghost" onClick={() => setResetTarget(u.username)}>
+                  Reset password
                 </button>
-              )}
+                {u.username !== user.username && (
+                  <button className="danger" onClick={() => doRemoveUser(u.username)}>
+                    Remove
+                  </button>
+                )}
+              </div>
             </div>
           ))
         )}
@@ -317,6 +324,14 @@ export function SettingsScreen({ user, onBack, onRestored }: Props) {
       )}
 
       {showImport && <ImportScreen onClose={() => setShowImport(false)} />}
+
+      {resetTarget && (
+        <ResetPasswordModal
+          username={resetTarget}
+          onClose={() => setResetTarget(null)}
+          onDone={(msg) => { setResetTarget(null); setMessage(msg); }}
+        />
+      )}
     </>
   );
 }
@@ -415,6 +430,62 @@ function RestoreModal({
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordModal({
+  username,
+  onClose,
+  onDone,
+}: {
+  username: string;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (newPassword !== confirm) { setError("Passwords do not match."); return; }
+    if (newPassword.length < 4) { setError("Password must be at least 4 characters."); return; }
+    setError(null);
+    setBusy(true);
+    try {
+      await resetUserPassword(username, newPassword);
+      onDone(`Password for "${username}" has been reset.`);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal">
+        <h3>Reset password — {username}</h3>
+        {error && <div className="banner error">{error}</div>}
+        <div className="field">
+          <label>New password</label>
+          <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoFocus />
+        </div>
+        <div className="field">
+          <label>Confirm new password</label>
+          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        </div>
+        <div className="form-actions">
+          <button className="ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button
+            className="primary"
+            onClick={submit}
+            disabled={busy || !newPassword || !confirm}
+          >
+            {busy ? "Saving…" : "Reset password"}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -129,6 +129,12 @@ function parseSystemDate(value: string): Date | null {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
+/** Weekday of the first day of an EC month: 0 = Sunday … 6 = Saturday. */
+export function ecMonthStartWeekday(year: number, month: number): number {
+  const jdn = ETHIOPIC_EPOCH + 365 * (year - 1) + Math.floor(year / 4) + 30 * (month - 1);
+  return (jdn + 1) % 7;
+}
+
 export function formatEcDate(dob: EcDate): string {
   const name = ETHIOPIAN_MONTHS[dob.month - 1] ?? `M${dob.month}`;
   return `${dob.day} ${name} ${dob.year}`;
