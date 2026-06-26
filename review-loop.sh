@@ -345,6 +345,23 @@ for i in $(seq 1 "$MAX_ITERS"); do
       echo "Non-mergeable verdict has no actionable blocking comments on pass $i. Do not merge. Logs in $LOG_DIR"
       exit 1
     fi
+    echo "-- Running real checks before declaring PR mergeable --"
+    CHECK_LOG="$LOG_DIR/checks-$i.log"
+    if run_checks "$CHECK_LOG"; then
+      CHECK_STATUS=0
+    else
+      CHECK_STATUS=$?
+    fi
+    if [ "$CHECK_STATUS" -ne 0 ]; then
+      echo "Verification failed. Check log: $CHECK_LOG"
+      if [ -f "$CHECK_LOG" ]; then
+        echo "Last 200 lines:"
+        tail -n 200 "$CHECK_LOG" || true
+      else
+        echo "Check log was not created."
+      fi
+      exit "$CHECK_STATUS"
+    fi
     if [[ "$VERDICT" == "APPROVE" ]]; then
       echo "Clean approval on pass $i. Safe to merge PR #${PR_NUMBER:-?}."
     else
