@@ -242,7 +242,7 @@ else
   CODEX_EXEC_SANDBOX_ARGS=(--sandbox workspace-write)
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   echo "Working tree has uncommitted changes. Commit or stash them before running this loop,"
   echo "so its auto-commits only ever contain its own fixes."
   exit 1
