@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: ./review-loop.sh
+# Usage: ./review-loop.sh [--i-am-in-a-disposable-sandbox]
 # Smoke:
 #   printf '%s\n' '{"verdict":"APPROVE","blocking_comments":[],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
 #   printf '%s\n' '{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"review-loop.sh","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
@@ -11,6 +11,11 @@
 #   ./review-loop.sh --dry-run-blocking-fix-sandbox-gate-test
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
+
+if [[ "${1:-}" == "--i-am-in-a-disposable-sandbox" ]]; then
+  export I_AM_IN_A_DISPOSABLE_SANDBOX=1
+  shift
+fi
 
 validate_review_output_schema() {
   local source="${1:-}"

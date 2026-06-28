@@ -454,3 +454,20 @@ pub fn get_patient_stats(state: State<AppState>) -> Result<patient::PatientStats
     let active = guard.as_ref().ok_or("Not logged in")?;
     patient::get_stats(&active.conn).map_err(|e| e.to_string())
 }
+
+// ── License / trial (no session required — called before login) ───────────────
+
+#[tauri::command]
+pub fn get_device_id() -> String {
+    crate::license::get_device_id()
+}
+
+#[tauri::command]
+pub fn get_license_status() -> Result<crate::license::LicenseStatus, String> {
+    crate::license::check_status()
+}
+
+#[tauri::command]
+pub fn activate_license(key: String) -> Result<(), String> {
+    crate::license::activate(&key)
+}

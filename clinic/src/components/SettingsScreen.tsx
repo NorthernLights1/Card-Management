@@ -3,6 +3,7 @@ import type { Role, UserInfo } from "../lib/api";
 import {
   addUser,
   changePassword,
+  getDeviceId,
   listUsers,
   removeUser,
   resetUserPassword,
@@ -21,9 +22,12 @@ export function SettingsScreen({ user, onBack }: Props) {
   const [addForm, setAddForm] = useState({ username: "", password: "", role: "Staff" as Role });
   const [resetTarget, setResetTarget] = useState<string | null>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [deviceIdCopied, setDeviceIdCopied] = useState(false);
 
   const loadUsers = () => listUsers().then(setUsers).catch((e) => setError(String(e)));
   useEffect(() => { loadUsers(); }, []);
+  useEffect(() => { getDeviceId().then(setDeviceId).catch(() => setDeviceId("Unavailable")); }, []);
 
   const doAddUser = async () => {
     setError(null);
@@ -118,6 +122,31 @@ export function SettingsScreen({ user, onBack }: Props) {
           )}
         </div>
       )}
+
+      <div className="form-card" style={{ marginTop: 16 }}>
+        <div className="section-title">Device ID</div>
+        <p className="muted">Your unique device identifier. Share this with your provider to get a license key.</p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            readOnly
+            value={deviceId ?? "Reading…"}
+            style={{ fontFamily: "monospace", fontSize: 13, color: "var(--ink-soft)" }}
+          />
+          <button
+            onClick={() => {
+              if (!deviceId) return;
+              navigator.clipboard.writeText(deviceId).then(() => {
+                setDeviceIdCopied(true);
+                setTimeout(() => setDeviceIdCopied(false), 2000);
+              });
+            }}
+            disabled={!deviceId}
+            style={{ flexShrink: 0 }}
+          >
+            {deviceIdCopied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+      </div>
 
       {showChangePassword && (
         <ChangePasswordModal onClose={() => setShowChangePassword(false)} />
