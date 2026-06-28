@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: ./review-loop.sh [--i-am-in-a-disposable-sandbox]
+# Usage: ./review-loop.sh [--i-am-in-a-disposable-sandbox] [--force]
 # Smoke:
 #   printf '%s\n' '{"verdict":"APPROVE","blocking_comments":[],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
 #   printf '%s\n' '{"verdict":"BLOCK MERGE","blocking_comments":[{"file":"review-loop.sh","location":"x","issue":"x","why_it_matters":"x","suggested_fix":"x"}],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}' | ./review-loop.sh --dry-run-verdict
@@ -12,10 +12,22 @@
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
 
-if [[ "${1:-}" == "--i-am-in-a-disposable-sandbox" ]]; then
-  export I_AM_IN_A_DISPOSABLE_SANDBOX=1
-  shift
-fi
+ALLOW_DIRTY=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --i-am-in-a-disposable-sandbox)
+      export I_AM_IN_A_DISPOSABLE_SANDBOX=1
+      shift
+      ;;
+    --force|--allow-dirty)
+      ALLOW_DIRTY=1
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 validate_review_output_schema() {
   local source="${1:-}"
@@ -57,6 +69,14 @@ require_disposable_sandbox_for_fix_pass() {
     echo "Refusing to run an automated fix pass outside a disposable sandbox."
     echo "Set I_AM_IN_A_DISPOSABLE_SANDBOX=1 only inside an isolated disposable environment."
     return 1
+  fi
+}
+
+require_clean_tree_for_fix_pass() {
+  if [[ "$ALLOW_DIRTY" == "1" ]]; then
+    echo "Refusing to run an automated fix pass with --force/--allow-dirty."
+    echo "Commit or stash local changes, then rerun without --force/--allow-dirty so generated commits only contain loop fixes."
+    exit 1
   fi
 }
 
@@ -204,6 +224,7 @@ if [[ "${1:-}" == "--dry-run-verdict" ]]; then
     echo "Non-mergeable verdict has no actionable blocking comments."
     exit 2
   fi
+  require_clean_tree_for_fix_pass
   require_disposable_sandbox_for_fix_pass
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   exit 20
@@ -242,10 +263,14 @@ else
   CODEX_EXEC_SANDBOX_ARGS=(--sandbox workspace-write)
 fi
 
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+if [[ "$ALLOW_DIRTY" != "1" && -n "$(git status --porcelain 2>/dev/null)" ]]; then
   echo "Working tree has uncommitted changes. Commit or stash them before running this loop,"
   echo "so its auto-commits only ever contain its own fixes."
   exit 1
+fi
+
+if [[ "$ALLOW_DIRTY" == "1" ]]; then
+  echo "-- Force enabled: skipping clean working tree check --"
 fi
 
 PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null) || true
@@ -401,6 +426,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
     exit 1
   fi
 
+  require_clean_tree_for_fix_pass
   require_disposable_sandbox_for_fix_pass
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   BLOCKING_JSON=$(jq '.blocking_comments' "$REVIEW_JSON")
