@@ -234,14 +234,14 @@ pub fn check_status() -> Result<LicenseStatus, String> {
     #[cfg(windows)]
     {
         match read_trial(&device_id) {
-            None => {
+            Ok(None) => {
                 // First run — start the trial clock
                 write_trial(&today_str, &today_str, &device_id)?;
                 Ok(LicenseStatus::Trial {
                     days_remaining: TRIAL_DAYS,
                 })
             }
-            Some(record) => {
+            Ok(Some(record)) => {
                 let start = NaiveDate::parse_from_str(&record.start_date, "%Y-%m-%d")
                     .map_err(|e| e.to_string())?;
                 let last_seen = NaiveDate::parse_from_str(&record.last_seen_date, "%Y-%m-%d")
