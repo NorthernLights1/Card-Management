@@ -107,7 +107,12 @@ export default function App() {
           <DeletedScreen onBack={() => setView({ name: "search" })} isAdmin={isAdmin} />
         )}
         {view.name === "settings" && (
-          <SettingsScreen user={user!} onBack={() => setView({ name: "search" })} />
+          <SettingsScreen
+            user={user!}
+            onBack={() => setView({ name: "search" })}
+            licenseStatus={licenseStatus!}
+            onLicenseActivated={() => getLicenseStatus().then(setLicenseStatus)}
+          />
         )}
         {view.name === "backups" && (
           <BackupsScreen

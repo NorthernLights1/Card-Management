@@ -234,14 +234,14 @@ pub fn check_status() -> Result<LicenseStatus, String> {
     #[cfg(windows)]
     {
         match read_trial(&device_id) {
-            None => {
+            Ok(None) => {
                 // First run — start the trial clock
                 write_trial(&today_str, &today_str, &device_id)?;
                 Ok(LicenseStatus::Trial {
                     days_remaining: TRIAL_DAYS,
                 })
             }
-            Some(record) => {
+            Ok(Some(record)) => {
                 let start = NaiveDate::parse_from_str(&record.start_date, "%Y-%m-%d")
                     .map_err(|e| e.to_string())?;
                 let last_seen = NaiveDate::parse_from_str(&record.last_seen_date, "%Y-%m-%d")
@@ -307,5 +307,48 @@ mod tests {
             trial_status_for_dates(start, last_seen, today),
             LicenseStatus::Expired
         ));
+    }
+
+    // ── make_key / normalize_key ──────────────────────────────────────────────
+
+    use super::{make_key, normalize_key};
+
+    #[test]
+    fn make_key_is_deterministic() {
+        assert_eq!(make_key("TEST_DEVICE"), make_key("TEST_DEVICE"));
+    }
+
+    #[test]
+    fn make_key_format_is_four_groups_of_five() {
+        let key = make_key("any_device_id");
+        let parts: Vec<&str> = key.split('-').collect();
+        assert_eq!(parts.len(), 4);
+        assert!(parts.iter().all(|p| p.len() == 5));
+    }
+
+    #[test]
+    fn make_key_output_is_uppercase_hex() {
+        let key = make_key("device");
+        for ch in key.chars() {
+            assert!(ch == '-' || ch.is_ascii_hexdigit(), "unexpected char: {ch}");
+            assert!(!ch.is_ascii_lowercase(), "should be uppercase: {ch}");
+        }
+    }
+
+    #[test]
+    fn normalize_key_strips_dashes_and_uppercases() {
+        assert_eq!(normalize_key("abcde-fghij-klmno-pqrst"), "ABCDEFGHIJKLMNOPQRST");
+        assert_eq!(normalize_key("ABCDE-FGHIJ-KLMNO-PQRST"), "ABCDEFGHIJKLMNOPQRST");
+    }
+
+    #[test]
+    fn different_device_ids_produce_different_keys() {
+        assert_ne!(make_key("DEVICE_A"), make_key("DEVICE_B"));
+    }
+
+    #[test]
+    fn key_round_trips_through_normalize() {
+        let key = make_key("some_device");
+        assert_eq!(normalize_key(&key), normalize_key(&make_key("some_device")));
     }
 }
