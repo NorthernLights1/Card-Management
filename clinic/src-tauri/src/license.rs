@@ -142,23 +142,75 @@ pub fn activate(key: &str) -> Result<(), String> {
 
 // ── Trial management ──────────────────────────────────────────────────────────
 
-fn trial_integrity(device_id: &str, date_str: &str) -> String {
+fn trial_integrity(device_id: &str, start_date: &str, last_seen_date: &str) -> String {
+    sha256_hex(&format!("{device_id}|{start_date}|{last_seen_date}"))
+}
+
+#[cfg(windows)]
+fn legacy_trial_integrity(device_id: &str, date_str: &str) -> String {
     sha256_hex(&format!("{device_id}|{date_str}"))
 }
 
 #[cfg(windows)]
-fn read_trial() -> Option<(String, String)> {
-    let val = read_reg_value("trial")?;
-    let mut parts = val.splitn(2, '|');
-    let date = parts.next()?.to_string();
-    let hash = parts.next()?.to_string();
-    Some((date, hash))
+struct TrialRecord {
+    start_date: String,
+    last_seen_date: String,
 }
 
 #[cfg(windows)]
-fn write_trial(date_str: &str, device_id: &str) -> Result<(), String> {
-    let integrity = trial_integrity(device_id, date_str);
-    write_reg_value("trial", &format!("{date_str}|{integrity}"))
+fn read_trial(device_id: &str) -> Result<Option<TrialRecord>, String> {
+    let Some(val) = read_reg_value("trial") else {
+        return Ok(None);
+    };
+    let parts: Vec<&str> = val.split('|').collect();
+    match parts.as_slice() {
+        [start_date, last_seen_date, stored_hash]
+            if *stored_hash == trial_integrity(device_id, start_date, last_seen_date) =>
+        {
+            Ok(Some(TrialRecord {
+                start_date: (*start_date).to_string(),
+                last_seen_date: (*last_seen_date).to_string(),
+            }))
+        }
+        [start_date, stored_hash]
+            if *stored_hash == legacy_trial_integrity(device_id, start_date) =>
+        {
+            Ok(Some(TrialRecord {
+                start_date: (*start_date).to_string(),
+                last_seen_date: (*start_date).to_string(),
+            }))
+        }
+        _ => Err("Trial integrity check failed.".to_string()),
+    }
+}
+
+#[cfg(windows)]
+fn write_trial(start_date: &str, last_seen_date: &str, device_id: &str) -> Result<(), String> {
+    let integrity = trial_integrity(device_id, start_date, last_seen_date);
+    write_reg_value("trial", &format!("{start_date}|{last_seen_date}|{integrity}"))
+}
+
+fn trial_status_for_elapsed_days(elapsed: i64) -> LicenseStatus {
+    if elapsed < 0 {
+        LicenseStatus::Expired
+    } else if elapsed < TRIAL_DAYS {
+        LicenseStatus::Trial {
+            days_remaining: TRIAL_DAYS - elapsed,
+        }
+    } else {
+        LicenseStatus::Expired
+    }
+}
+
+fn trial_status_for_dates(
+    start_date: NaiveDate,
+    last_seen_date: NaiveDate,
+    today: NaiveDate,
+) -> LicenseStatus {
+    if today < last_seen_date {
+        return LicenseStatus::Expired;
+    }
+    trial_status_for_elapsed_days((today - start_date).num_days())
 }
 
 // ── Status check ──────────────────────────────────────────────────────────────
@@ -181,29 +233,28 @@ pub fn check_status() -> Result<LicenseStatus, String> {
 
     #[cfg(windows)]
     {
-        match read_trial() {
+        match read_trial(&device_id) {
             None => {
                 // First run — start the trial clock
-                write_trial(&today_str, &device_id)?;
+                write_trial(&today_str, &today_str, &device_id)?;
                 Ok(LicenseStatus::Trial {
                     days_remaining: TRIAL_DAYS,
                 })
             }
-            Some((date_str, stored_hash)) => {
-                // Integrity check — detect registry date tampering
-                if stored_hash != trial_integrity(&device_id, &date_str) {
+            Some(record) => {
+                let start = NaiveDate::parse_from_str(&record.start_date, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                let last_seen = NaiveDate::parse_from_str(&record.last_seen_date, "%Y-%m-%d")
+                    .map_err(|e| e.to_string())?;
+                if today < last_seen {
                     return Ok(LicenseStatus::Expired);
                 }
-                let start = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-                    .map_err(|e| e.to_string())?;
-                let elapsed = (today - start).num_days();
-                if elapsed < TRIAL_DAYS {
-                    Ok(LicenseStatus::Trial {
-                        days_remaining: TRIAL_DAYS - elapsed,
-                    })
-                } else {
-                    Ok(LicenseStatus::Expired)
-                }
+                write_trial(&record.start_date, &today_str, &device_id)?;
+                Ok(trial_status_for_dates(start, last_seen, today))
+            }
+            Err(_) => {
+                // Integrity check — detect registry date tampering
+                Ok(LicenseStatus::Expired)
             }
         }
     }
@@ -212,4 +263,49 @@ pub fn check_status() -> Result<LicenseStatus, String> {
     Ok(LicenseStatus::Trial {
         days_remaining: TRIAL_DAYS,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{trial_status_for_dates, trial_status_for_elapsed_days, LicenseStatus};
+    use chrono::NaiveDate;
+
+    fn trial_days_remaining(status: LicenseStatus) -> Option<i64> {
+        match status {
+            LicenseStatus::Trial { days_remaining } => Some(days_remaining),
+            LicenseStatus::Licensed | LicenseStatus::Expired => None,
+        }
+    }
+
+    #[test]
+    fn trial_starts_with_full_days_remaining() {
+        assert_eq!(trial_days_remaining(trial_status_for_elapsed_days(0)), Some(14));
+    }
+
+    #[test]
+    fn trial_allows_last_valid_day() {
+        assert_eq!(trial_days_remaining(trial_status_for_elapsed_days(13)), Some(1));
+    }
+
+    #[test]
+    fn trial_expires_at_fourteen_elapsed_days() {
+        assert!(matches!(trial_status_for_elapsed_days(14), LicenseStatus::Expired));
+    }
+
+    #[test]
+    fn trial_expires_when_clock_moves_before_start_date() {
+        assert!(matches!(trial_status_for_elapsed_days(-1), LicenseStatus::Expired));
+    }
+
+    #[test]
+    fn trial_expires_when_clock_rolls_back_after_later_valid_day() {
+        let start = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let last_seen = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
+
+        assert!(matches!(
+            trial_status_for_dates(start, last_seen, today),
+            LicenseStatus::Expired
+        ));
+    }
 }
