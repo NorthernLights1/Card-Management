@@ -161,6 +161,18 @@ fn write_trial(date_str: &str, device_id: &str) -> Result<(), String> {
     write_reg_value("trial", &format!("{date_str}|{integrity}"))
 }
 
+fn trial_status_for_elapsed_days(elapsed: i64) -> LicenseStatus {
+    if elapsed < 0 {
+        LicenseStatus::Expired
+    } else if elapsed < TRIAL_DAYS {
+        LicenseStatus::Trial {
+            days_remaining: TRIAL_DAYS - elapsed,
+        }
+    } else {
+        LicenseStatus::Expired
+    }
+}
+
 // ── Status check ──────────────────────────────────────────────────────────────
 
 /// Called on every app launch before the login screen is shown.
@@ -197,13 +209,7 @@ pub fn check_status() -> Result<LicenseStatus, String> {
                 let start = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
                     .map_err(|e| e.to_string())?;
                 let elapsed = (today - start).num_days();
-                if elapsed < TRIAL_DAYS {
-                    Ok(LicenseStatus::Trial {
-                        days_remaining: TRIAL_DAYS - elapsed,
-                    })
-                } else {
-                    Ok(LicenseStatus::Expired)
-                }
+                Ok(trial_status_for_elapsed_days(elapsed))
             }
         }
     }
@@ -212,4 +218,36 @@ pub fn check_status() -> Result<LicenseStatus, String> {
     Ok(LicenseStatus::Trial {
         days_remaining: TRIAL_DAYS,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{trial_status_for_elapsed_days, LicenseStatus};
+
+    fn trial_days_remaining(status: LicenseStatus) -> Option<i64> {
+        match status {
+            LicenseStatus::Trial { days_remaining } => Some(days_remaining),
+            LicenseStatus::Licensed | LicenseStatus::Expired => None,
+        }
+    }
+
+    #[test]
+    fn trial_starts_with_full_days_remaining() {
+        assert_eq!(trial_days_remaining(trial_status_for_elapsed_days(0)), Some(14));
+    }
+
+    #[test]
+    fn trial_allows_last_valid_day() {
+        assert_eq!(trial_days_remaining(trial_status_for_elapsed_days(13)), Some(1));
+    }
+
+    #[test]
+    fn trial_expires_at_fourteen_elapsed_days() {
+        assert!(matches!(trial_status_for_elapsed_days(14), LicenseStatus::Expired));
+    }
+
+    #[test]
+    fn trial_expires_when_clock_moves_before_start_date() {
+        assert!(matches!(trial_status_for_elapsed_days(-1), LicenseStatus::Expired));
+    }
 }
