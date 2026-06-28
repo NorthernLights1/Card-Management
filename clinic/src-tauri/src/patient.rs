@@ -289,6 +289,17 @@ pub fn list_deleted(conn: &Connection) -> Result<Vec<Patient>, String> {
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
 }
 
+/// List all active patients ordered by card number (home screen view).
+pub fn list_all(conn: &Connection) -> Result<Vec<Patient>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL ORDER BY card_first, card_sub LIMIT 5000"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt.query_map([], row_to_patient).map_err(e2s)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
 // --- reads ------------------------------------------------------------------
 
 /// Card number for a patient id (regardless of deleted state) — for the audit log.
@@ -767,4 +778,79 @@ mod tests {
         let next = create(&mut conn, &input("New", "X", "Y", "0911111119"), "t").unwrap();
         assert_eq!(next.card_number, "5/2");
     }
+}
+
+// ── Stats / Reports ──────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize)]
+pub struct CityCount {
+    pub city: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PatientStats {
+    pub total: i64,
+    pub registered_this_month: i64,
+    pub registered_this_year: i64,
+    pub male: i64,
+    pub female: i64,
+    pub cities: Vec<CityCount>,
+}
+
+pub fn get_stats(conn: &Connection) -> rusqlite::Result<PatientStats> {
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let registered_this_month: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL \
+         AND strftime('%Y-%m', registered_at) = strftime('%Y-%m', 'now')",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let registered_this_year: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL \
+         AND strftime('%Y', registered_at) = strftime('%Y', 'now')",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let male: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL AND sex = 'Male'",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let female: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL AND sex = 'Female'",
+        [],
+        |r| r.get(0),
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(NULLIF(TRIM(city), ''), 'Unknown') as city, COUNT(*) as cnt \
+         FROM patients WHERE deleted_at IS NULL \
+         GROUP BY city ORDER BY cnt DESC LIMIT 10",
+    )?;
+    let cities = stmt
+        .query_map([], |r| {
+            Ok(CityCount {
+                city: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(PatientStats {
+        total,
+        registered_this_month,
+        registered_this_year,
+        male,
+        female,
+        cities,
+    })
 }

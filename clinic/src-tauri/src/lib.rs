@@ -30,7 +30,9 @@ pub fn run() {
             commands::add_user,
             commands::remove_user,
             commands::list_users,
+            commands::reset_user_password,
             commands::change_password,
+            commands::list_patients,
             commands::register_patient,
             commands::update_patient,
             commands::delete_patient,
@@ -50,6 +52,7 @@ pub fn run() {
             commands::import_preview,
             commands::import_apply,
             commands::export_patient_csv,
+            commands::get_patient_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -61,6 +61,9 @@ export const listUsers = () => invoke<UserInfo[]>("list_users");
 export const changePassword = (oldPassword: string, newPassword: string) =>
   invoke<void>("change_password", { oldPassword, newPassword });
 
+export const resetUserPassword = (username: string, newPassword: string) =>
+  invoke<void>("reset_user_password", { username, newPassword });
+
 // --- patients ---
 export const registerPatient = (input: PatientInput) =>
   invoke<Patient>("register_patient", { input });
@@ -70,6 +73,8 @@ export const updatePatient = (id: number, input: PatientInput) =>
 
 export const deletePatient = (id: number) =>
   invoke<void>("delete_patient", { id });
+
+export const listPatients = () => invoke<Patient[]>("list_patients");
 
 export const searchPatients = (query: string) =>
   invoke<Patient[]>("search_patients", { query });
@@ -125,3 +130,16 @@ export const restorePatient = (id: number) =>
 
 export const purgePatient = (id: number) =>
   invoke<void>("purge_patient", { id });
+
+// --- reports (Admin only) ---
+export type CityCount = { city: string; count: number };
+export type PatientStats = {
+  total: number;
+  registered_this_month: number;
+  registered_this_year: number;
+  male: number;
+  female: number;
+  cities: CityCount[];
+};
+
+export const getPatientStats = () => invoke<PatientStats>("get_patient_stats");

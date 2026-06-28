@@ -186,6 +186,19 @@ pub fn list_users(state: State<AppState>) -> Result<Vec<UserInfo>, String> {
 }
 
 #[tauri::command]
+pub fn reset_user_password(
+    state: State<AppState>,
+    username: String,
+    new_password: String,
+) -> Result<(), String> {
+    let (actor, master) = require_admin(&state)?;
+    let mut store = AuthStore::load(&state.auth_path())?;
+    store.reset_user_password(&master, &username, &new_password)?;
+    state.audit(&actor, "Admin", "PASSWORD_RESET", &username);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn change_password(
     state: State<AppState>,
     old_password: String,
@@ -245,6 +258,13 @@ pub fn delete_patient(state: State<AppState>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn list_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
+    let guard = state.active.lock().unwrap();
+    let active = guard.as_ref().ok_or("Not logged in")?;
+    patient::list_all(&active.conn)
+}
+
+#[tauri::command]
 pub fn search_patients(state: State<AppState>, query: String) -> Result<Vec<Patient>, String> {
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
@@ -268,15 +288,12 @@ pub fn check_duplicates(
     patient::find_duplicates(&active.conn, &input)
 }
 
-// --- deleted patients (Admin only) -----------------------------------------
+// --- deleted patients (list + restore: any role; purge: Admin only) ---------
 
 #[tauri::command]
 pub fn list_deleted_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
-    if active.session.role != Role::Admin {
-        return Err("This action requires an Admin".into());
-    }
     patient::list_deleted(&active.conn)
 }
 
@@ -284,12 +301,10 @@ pub fn list_deleted_patients(state: State<AppState>) -> Result<Vec<Patient>, Str
 pub fn restore_patient(state: State<AppState>, id: i64) -> Result<(), String> {
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
-    if active.session.role != Role::Admin {
-        return Err("This action requires an Admin".into());
-    }
     let actor = active.session.username.clone();
+    let role = role_str(active.session.role);
     patient::restore(&active.conn, id)?;
-    state.audit(&actor, "Admin", "RESTORE_PATIENT", &patient::card_of(&active.conn, id));
+    state.audit(&actor, role, "RESTORE_PATIENT", &patient::card_of(&active.conn, id));
     state.run_backups(&active.conn);
     Ok(())
 }
@@ -430,4 +445,12 @@ pub fn read_audit_log(state: State<AppState>) -> Result<String, String> {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(300); // most recent 300 entries
     Ok(lines[start..].join("\n"))
+}
+
+#[tauri::command]
+pub fn get_patient_stats(state: State<AppState>) -> Result<patient::PatientStats, String> {
+    require_admin(&state)?;
+    let guard = state.active.lock().unwrap();
+    let active = guard.as_ref().ok_or("Not logged in")?;
+    patient::get_stats(&active.conn).map_err(|e| e.to_string())
 }

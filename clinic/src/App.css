@@ -90,9 +90,10 @@ label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 
 .app-header nav { display: flex; gap: 8px; align-items: center; }
 .app-main { max-width: 920px; margin: 0 auto; padding: 24px 22px 64px; }
 
-.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 18px; }
-.toolbar .search { flex: 1; }
-.toolbar .search input { font-size: 16px; padding: 12px 14px; }
+.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.toolbar select { width: auto; }
+.search { max-width: 600px; margin: 0 auto 18px; }
+.search input { font-size: 16px; padding: 12px 14px; }
 
 /* --- result rows --- */
 .result-row {
@@ -138,7 +139,26 @@ label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-grid .full { grid-column: 1 / -1; }
 .form-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 22px; }
-.ec-date { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 8px; }
+/* --- EC date calendar picker --- */
+.ec-calendar { max-width: 294px; }
+.ec-cal-header { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; }
+.ec-cal-header .ghost { padding: 5px 10px; }
+.ec-cal-month { flex: 1; text-align: center; font-weight: 600; font-size: 14px; }
+.ec-cal-year { width: 68px !important; padding: 5px 6px; font-size: 13px; text-align: center; }
+.ec-cal-label {
+  text-align: center; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--ink-soft); margin-bottom: 8px;
+}
+.ec-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.ec-cal-weekday { text-align: center; font-size: 11px; font-weight: 600; color: var(--ink-soft); padding: 4px 2px; }
+.ec-cal-day {
+  width: 100%; min-height: 34px; padding: 2px; text-align: center; font-size: 13px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; cursor: pointer; color: var(--ink);
+}
+.ec-cal-day:hover { background: var(--surface-2); border-color: var(--line); }
+.ec-cal-day--selected { background: var(--accent) !important; color: var(--accent-ink) !important; border-color: var(--accent) !important; font-weight: 600; }
 .radio-row { display: flex; gap: 18px; margin-bottom: 6px; }
 .radio-row label { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--ink); }
 .radio-row input { width: auto; }

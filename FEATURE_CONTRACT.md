@@ -1,6 +1,6 @@
 # Feature Contract — Clinic Card Management System
 
-**Version:** 5.0 (approved) · **Date:** 2026-06-25
+**Version:** 5.2 (approved) · **Date:** 2026-06-26
 
 ---
 
@@ -36,7 +36,7 @@ get the card number → pull the physical folder.
 | **First name** | Yes | Text. |
 | **Father's name** | Yes | Text. |
 | **Grandfather's name** | Yes | Text. |
-| **Age** *or* **DOB** | One of the two | **DOB** entered in **Ethiopian calendar**; age derived from it. **Age** stored with the date recorded, so displayed age **auto-increases each year** (computed live — §4.1). |
+| **Age** *or* **DOB** | One of the two | **DOB** entered via an **Ethiopian calendar picker** (month grid with weekday columns, month-name header, year input, clickable days). Age derived from DOB. **Age** stored with the date recorded, so displayed age **auto-increases each year** (computed live — §4.1). |
 | **Sex** | Yes | Male / Female only. |
 | **Phone** | **Yes** | 10 digits, must start `09` or `07`. Non-unique (families share numbers) but used for duplicate detection. |
 | **Address** | No | Single free-text box. |
@@ -62,15 +62,25 @@ compute from the EC DOB the same way.
 
 ## 6. Core Features
 
-- **6.1 Find patient (primary):** search by name parts / phone / card number, partial
-  match. Results show the **card number prominently** + details to disambiguate.
+- **6.1 Home / patient list:** on login, the home screen shows **all active patients**
+  (up to 5 000) in card-number order with a live count. Staff can filter by **Sex** and
+  **City** (City dropdown is populated from the real cities in the database). Typing in
+  the search box narrows the list to name parts, phone, or card number. The card number
+  is shown prominently on every row to support the reverse-lookup use-case.
 - **6.2 Register:** validated form; card number auto-assigned. **Duplicate warning** if
   **either** (first+father+grandfather names match) **or** (phone matches) an existing
   patient — matches shown, staff may still proceed.
-- **6.3 Edit:** any field except card number.
+- **6.3 Edit:** any field except card number. Field order in the form: names, sex, phone,
+  age/DOB, **city**, address.
+- **6.6 Settings screen:** accessible to all users. Contains "Change password" (all roles) and
+  "Users" section (Admin only — add, reset, remove users).
+- **6.7 Backups screen:** Admin only. Contains USB backup, export/restore, import from
+  Excel/CSV, export patient list, and activity log.
+- **6.8 Reports screen:** Admin only. Overview tier: total patients, registered this month,
+  registered this year. Demographics tier: male/female counts with visual bar, top-10 cities
+  by patient count.
 - **6.4 Delete:** **soft delete** only — record hidden, recoverable, never erased (see §10).
-- **6.5 Print card:** print/reprint a label with card number + patient name, for
-  lost-card replacement.
+- **6.5 Print card:** ~~removed~~ — clinic uses pre-printed cards that do not feed into a printer.
 
 ---
 
@@ -86,14 +96,17 @@ compute from the EC DOB the same way.
 
 Two-tier permission model:
 
-| Capability | Staff | Admin |
+| Capability | Reception | Admin |
 |---|---|---|
-| Search, register, edit, print card | ✅ | ✅ |
+| Search, register, edit | ✅ | ✅ |
 | Soft-delete a patient | ✅ | ✅ |
-| View / restore / purge deleted patients | — | ✅ |
+| Change own password (via Settings) | ✅ | ✅ |
+| View / restore deleted patients | ✅ | ✅ |
+| Permanently purge deleted patients | — | ✅ |
 | Excel import | — | ✅ |
-| Backup config, export, import/restore | — | ✅ |
-| Add / remove users, set roles | — | ✅ |
+| Backup config, export, import/restore (Backups screen) | — | ✅ |
+| Add / remove users, reset passwords (Settings screen) | — | ✅ |
+| View reports | — | ✅ |
 | View audit log | — | ✅ |
 
 - Each user has their **own username + password**. Login required to open the app.
@@ -104,11 +117,15 @@ Two-tier permission model:
 - **First user is an Admin.** Setup prompts for a **second Admin**.
 - **Audit trail:** every register / edit / delete / restore / purge records **which user**
   did it and when (system clock) — in the DB and in the external log (§15).
-- ✅ **Forgotten password is survivable** — another user can log in and re-create the
-  account. Data is only lost if **every** user loses their password.
+- ✅ **Any user's forgotten password is survivable** — any Admin can **reset any other
+  user's password** (no old password required; the Admin's session master key is used to
+  re-wrap). Staff who forget their password just ask an Admin. Data is only unrecoverable
+  if **every** user loses their password simultaneously.
+- ✅ **Admin password reset is audited** — every reset writes `PASSWORD_RESET | target`
+  to the audit log.
 - ⚠️ **Keep at least two Admins** — only Admins manage users; if the sole Admin forgets
   their password, no one can add/fix users (data still opens for others, but user
-  management is stuck).
+  management is stuck). Two Admins removes this risk entirely.
 
 ---
 
@@ -209,11 +226,23 @@ language other than English.
   never reused.
 - Dates: DOB in Ethiopian calendar; all system timestamps in system clock time.
 - Age: stored with record date, computed live, auto-increments.
+- Patient form field order: first/father/grandfather names, sex, phone, age/DOB, city,
+  address. City placed after DOB so related location fields are grouped together.
 - Address: single free-text box + separate City field.
 - Phone: mandatory, non-unique, used for duplicate detection.
 - Language: English only.
 - Users: multiple, per-user passwords, two-tier (Admin / Staff).
 - Encryption: SQLCipher at rest, master key wrapped per user password.
+- Admin password reset: uses the session master key (already in memory) to re-wrap for
+  the target user — no old password needed.
+- Home screen: all-patients view (not search-first) with live count and Sex/City filters.
+  City filter dynamically populated from database values. Search narrows the same list.
+- Role display label: internal value remains "Staff" (stored in auth.json); displayed as
+  "Reception" in all UI surfaces.
+- Settings screen: user management (add/reset/remove) + change-own-password, separated from
+  the Backups screen. Settings accessible to all roles; Users section Admin-only.
+- Reports screen: Admin-only. Tier 1 (counts) + Tier 2 (demographics). Tier 3 (visit
+  patterns) deferred until date-of-visit feature is built.
 - Backup: PC-local (live + 5 daily) + designated USB (serial-recognized); export/import;
   Google Drive last.
 - Audit: in-DB trail + external append-only `.txt` log (identifiers only).

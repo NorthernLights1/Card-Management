@@ -110,10 +110,6 @@ export function PatientForm({ patient, onSaved, onCancel }: Props) {
             inputMode="numeric"
           />
         </div>
-        <div>
-          <label>City</label>
-          <input value={city} onChange={(e) => setCity(e.target.value)} />
-        </div>
 
         <div className="full">
           <label>Age or date of birth</label>
@@ -132,7 +128,7 @@ export function PatientForm({ patient, onSaved, onCancel }: Props) {
                 checked={ageMode === "dob"}
                 onChange={() => setAgeMode("dob")}
               />
-              Known date of birth
+              Date of birth (Ethiopian calendar)
             </label>
           </div>
           {ageMode === "age" ? (
@@ -148,6 +144,11 @@ export function PatientForm({ patient, onSaved, onCancel }: Props) {
           ) : (
             <EcDateInput value={dob} onChange={setDob} />
           )}
+        </div>
+
+        <div className="full">
+          <label>City</label>
+          <input value={city} onChange={(e) => setCity(e.target.value)} />
         </div>
 
         <div className="full">

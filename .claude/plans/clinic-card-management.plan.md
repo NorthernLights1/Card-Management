@@ -52,7 +52,85 @@ Greenfield repo — no existing code or conventions. This build establishes them
 | All admins lose password | Low / total loss | Enforce 2-admin setup + warning |
 
 ## Acceptance
-- [ ] All phases 0–8 complete (9 deferred)
-- [ ] `cargo test` and validation steps pass per phase
-- [ ] Encryption, auth, backups verified by tests, not just UI
-- [ ] First demo milestone: through Phase 3 (encrypted multi-user register + search)
+- [x] All phases 0–8 complete (9 deferred)
+- [x] `cargo test` and validation steps pass per phase
+- [x] Encryption, auth, backups verified by tests, not just UI
+- [x] First demo milestone: through Phase 3 (encrypted multi-user register + search)
+
+---
+
+## Post-v1 Improvements (2026-06-26)
+
+Changes made after Phase 8 delivery in response to client review:
+
+### UX / Layout
+- Patient registration form: **City** field moved to after the Age/DOB block and before
+  Address, so location fields are grouped together.
+
+### Home screen
+- Replaced the search-first empty state with an **all-patients view**: loads all active
+  patients on login (up to 5 000), shows a live count, supports **Sex** and **City**
+  filter dropdowns (City list populated dynamically from the database), and search still
+  narrows the same list. New Rust command: `list_patients` / `patient::list_all`.
+
+### Admin password reset
+- Admins can now **reset any user's password** without knowing the old one. The session
+  master key (already in memory after login) is used to re-wrap the target user's record.
+  New: `AuthStore::reset_user_password`, `reset_user_password` Tauri command, "Reset
+  password" button in the Users section of SettingsScreen, `ResetPasswordModal` component.
+  Audited as `PASSWORD_RESET` in the audit log.
+
+### Settings screen, Reports screen, Reception role (2026-06-26)
+- **Settings screen** (`SettingsScreen.tsx`): accessible to all users. Contains change-own-password
+  section (all roles) and user management section (Admin only — add, reset, remove). Replaces the
+  old change-password modal that lived in `App.tsx` and the user management block that was embedded
+  in the old Backups screen.
+- **Backups screen** (`BackupsScreen.tsx`): new file containing the former `SettingsScreen.tsx`
+  content (USB backup, export, restore, import, activity log) with user management removed.
+- **Reports screen** (`ReportsScreen.tsx`): Admin-only. Tier 1 — overview stat boxes (total,
+  this month, this year). Tier 2 — sex breakdown bar, top-10 cities table.
+- **Rust `get_patient_stats` command**: added `PatientStats` + `CityCount` structs and `get_stats()`
+  to `patient.rs`; wired up as a Tauri command in `commands.rs` / `lib.rs`.
+- **Reception role label**: internal value stays `"Staff"`; displayed as "Reception" in all UI
+  dropdowns and role badges via inline mapping.
+
+| File | Change |
+|---|---|
+| `src/App.tsx` | New nav (Settings/Reports/Backups), new view types, removed change-pw modal |
+| `src/components/SettingsScreen.tsx` | Rewritten — change password + user management |
+| `src/components/BackupsScreen.tsx` | New — backup content split out from old SettingsScreen |
+| `src/components/ReportsScreen.tsx` | New — overview counts + demographics |
+| `src/lib/api.ts` | Added `PatientStats`, `CityCount` types + `getPatientStats()` |
+| `src-tauri/src/patient.rs` | Added `get_stats()`, `PatientStats`, `CityCount` |
+| `src-tauri/src/commands.rs` | Added `get_patient_stats` command |
+| `src-tauri/src/lib.rs` | Registered `get_patient_stats` |
+
+### Ethiopian calendar DOB picker (2026-06-26)
+- `EcDateInput` component rewritten as a proper calendar grid: month-name header
+  with ← / → navigation, year number input, Su–Sa weekday columns, clickable day
+  cells, selected day highlighted in accent color. Navigation only updates the view;
+  a value is only committed when the user clicks a day.
+- Radio label updated from "Known date of birth" → "Date of birth (Ethiopian calendar)".
+- `ecMonthStartWeekday(year, month)` helper added to `ethiopian.ts` to compute the
+  weekday offset for each month start.
+
+| File | Change |
+|---|---|
+| `src-tauri/src/ethiopian.ts` | Added `ecMonthStartWeekday` export |
+| `src/components/EcDateInput.tsx` | Rewritten as calendar grid picker |
+| `src/components/PatientForm.tsx` | Updated radio label to name Ethiopian calendar |
+| `src/App.css` | Replaced `.ec-date` with `.ec-calendar` styles |
+
+### Files changed (v5.1)
+| File | Change |
+|---|---|
+| `src-tauri/src/auth.rs` | Added `reset_user_password` method |
+| `src-tauri/src/patient.rs` | Added `list_all` function |
+| `src-tauri/src/commands.rs` | Added `reset_user_password` and `list_patients` commands |
+| `src-tauri/src/lib.rs` | Registered both new commands |
+| `src/lib/api.ts` | Added `resetUserPassword` and `listPatients` wrappers |
+| `src/components/PatientForm.tsx` | Moved City field after DOB block |
+| `src/components/SearchScreen.tsx` | Rewrote as all-patients view with filters |
+| `src/components/SettingsScreen.tsx` | Added reset password button and `ResetPasswordModal` |
+| `FEATURE_CONTRACT.md` | Updated §6, §8 roles table, §8 password text, Decision Log |
+| `clinic/USER_GUIDE.md` | Updated warnings, daily use, roles table, added Users section |
