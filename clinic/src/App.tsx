@@ -32,7 +32,7 @@ export default function App() {
   useEffect(() => {
     getLicenseStatus()
       .then(setLicenseStatus)
-      .catch(() => setLicenseStatus({ status: "Trial", days_remaining: 14 }));
+      .catch(() => setLicenseStatus({ status: "Expired" }));
   }, []);
 
   // Step 2: proceed with normal init once license is known (and not expired)
@@ -55,10 +55,10 @@ export default function App() {
     setPhase("login");
   };
 
-  if (phase === "loading") return <div className="auth-wrap">Loading…</div>;
   if (licenseStatus?.status === "Expired") {
     return <LicenseScreen onActivated={() => getLicenseStatus().then(setLicenseStatus)} />;
   }
+  if (phase === "loading") return <div className="auth-wrap">Loading…</div>;
   if (phase === "setup") return <SetupScreen onReady={enterApp} />;
   if (phase === "login") return <LoginScreen onAuthed={enterApp} />;
 
