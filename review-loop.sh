@@ -9,9 +9,11 @@
 #   ./review-loop.sh --dry-run-blocking-comment-allowlist-test
 #   ./review-loop.sh --dry-run-sandbox-gate
 #   ./review-loop.sh --dry-run-blocking-fix-sandbox-gate-test
+#   ./review-loop.sh --dry-run-dirty-force-approval-test
 # Run from the project root, on a PR branch checked out via `gh pr checkout <n>`.
 set -euo pipefail
 
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
 ALLOW_DIRTY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +79,18 @@ require_clean_tree_for_fix_pass() {
     echo "Refusing to run an automated fix pass with --force/--allow-dirty."
     echo "Commit or stash local changes, then rerun without --force/--allow-dirty so generated commits only contain loop fixes."
     exit 1
+  fi
+}
+
+require_clean_tree_for_mergeable_result() {
+  if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    if [[ "$ALLOW_DIRTY" == "1" ]]; then
+      echo "Refusing to declare PR mergeable with --force/--allow-dirty while the working tree has uncommitted changes."
+    else
+      echo "Refusing to declare PR mergeable while the working tree has uncommitted changes."
+    fi
+    echo "Commit or stash local changes before relying on the final approval result."
+    return 1
   fi
 }
 
@@ -218,6 +232,7 @@ if [[ "${1:-}" == "--dry-run-verdict" ]]; then
   echo "Verdict: $VERDICT | Blocking comments: $BLOCKING_COUNT"
   if [ "$BLOCKING_COUNT" -eq 0 ]; then
     if is_mergeable_verdict "$VERDICT"; then
+      require_clean_tree_for_mergeable_result
       echo "No blocking comments. Review loop complete."
       exit 0
     fi
@@ -228,6 +243,33 @@ if [[ "${1:-}" == "--dry-run-verdict" ]]; then
   require_disposable_sandbox_for_fix_pass
   echo "-- Blocking issues present. Starting scoped fix pass. --"
   exit 20
+fi
+
+if [[ "${1:-}" == "--dry-run-dirty-force-approval-test" ]]; then
+  command -v git >/dev/null 2>&1 || { echo "Missing dependency: git"; exit 1; }
+  command -v jq >/dev/null 2>&1 || { echo "Missing dependency: jq"; exit 1; }
+  TEST_REPO=$(mktemp -d -t review-loop-dirty-force.XXXXXX)
+  (
+    cd "$TEST_REPO"
+    git init --quiet
+    git config user.email review-loop@example.invalid
+    git config user.name "Review Loop"
+    touch tracked.txt
+    git add tracked.txt
+    git commit -m "init" --quiet
+    printf 'dirty\n' > dirty.txt
+    APPROVING_REVIEW='{"verdict":"APPROVE","blocking_comments":[],"non_blocking_comments":[],"missing_tests":[],"follow_up_patch_plan":[]}'
+    OUTPUT=$(printf '%s\n' "$APPROVING_REVIEW" | "$SCRIPT_PATH" --force --dry-run-verdict 2>&1) && {
+      echo "Dirty --force approval dry-run was accepted."
+      exit 1
+    }
+    if grep -q "Review loop complete" <<< "$OUTPUT"; then
+      echo "Dirty --force approval dry-run printed a mergeable result."
+      exit 1
+    fi
+  )
+  echo "Dirty --force approval dry-run refuses the mergeable path."
+  exit 0
 fi
 
 if [[ "${1:-}" == "--dry-run-sandbox-gate" ]]; then
@@ -396,6 +438,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
       echo "Non-mergeable verdict has no actionable blocking comments on pass $i. Do not merge. Logs in $LOG_DIR"
       exit 1
     fi
+    require_clean_tree_for_mergeable_result
     echo "-- Running real checks before declaring PR mergeable --"
     CHECK_LOG="$LOG_DIR/checks-$i.log"
     if run_checks "$CHECK_LOG"; then
@@ -413,6 +456,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
       fi
       exit "$CHECK_STATUS"
     fi
+    require_clean_tree_for_mergeable_result
     if [[ "$VERDICT" == "APPROVE" ]]; then
       echo "Clean approval on pass $i. Safe to merge PR #${PR_NUMBER:-?}."
     else
