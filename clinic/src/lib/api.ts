@@ -143,3 +143,13 @@ export type PatientStats = {
 };
 
 export const getPatientStats = () => invoke<PatientStats>("get_patient_stats");
+
+// --- license / trial ---
+export type LicenseStatus =
+  | { status: "Licensed" }
+  | { status: "Trial"; days_remaining: number }
+  | { status: "Expired" };
+
+export const getDeviceId = () => invoke<string>("get_device_id");
+export const getLicenseStatus = () => invoke<LicenseStatus>("get_license_status");
+export const activateLicense = (key: string) => invoke<void>("activate_license", { key });

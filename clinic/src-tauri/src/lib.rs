@@ -4,6 +4,7 @@ mod backup;
 mod commands;
 mod db;
 mod import;
+mod license;
 mod patient;
 
 use tauri::Manager;
@@ -53,6 +54,9 @@ pub fn run() {
             commands::import_apply,
             commands::export_patient_csv,
             commands::get_patient_stats,
+            commands::get_device_id,
+            commands::get_license_status,
+            commands::activate_license,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

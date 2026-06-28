@@ -75,6 +75,16 @@ label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 
 .auth-card p.sub { margin: 0 0 20px; color: var(--ink-soft); font-size: 14px; }
 .field { margin-bottom: 14px; }
 
+/* --- trial banner --- */
+.trial-banner {
+  background: var(--warn-soft);
+  color: var(--warn);
+  text-align: center;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
 /* --- app shell --- */
 .app-header {
   display: flex;

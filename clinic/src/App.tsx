@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import type { Patient, UserInfo } from "./lib/api";
-import { isInitialized, logout } from "./lib/api";
+import type { LicenseStatus, Patient, UserInfo } from "./lib/api";
+import { getLicenseStatus, isInitialized, logout } from "./lib/api";
 import { SetupScreen } from "./components/SetupScreen";
 import { LoginScreen } from "./components/LoginScreen";
+import { LicenseScreen } from "./components/LicenseScreen";
 import { SearchScreen } from "./components/SearchScreen";
 import { PatientForm } from "./components/PatientForm";
 import { DeletedScreen } from "./components/DeletedScreen";
@@ -25,12 +26,22 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [user, setUser] = useState<UserInfo | null>(null);
   const [view, setView] = useState<View>({ name: "search" });
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
 
+  // Step 1: check license on mount
   useEffect(() => {
+    getLicenseStatus()
+      .then(setLicenseStatus)
+      .catch(() => setLicenseStatus({ status: "Trial", days_remaining: 14 }));
+  }, []);
+
+  // Step 2: proceed with normal init once license is known (and not expired)
+  useEffect(() => {
+    if (licenseStatus === null || licenseStatus.status === "Expired") return;
     isInitialized()
       .then((ready) => setPhase(ready ? "login" : "setup"))
       .catch(() => setPhase("login"));
-  }, []);
+  }, [licenseStatus]);
 
   const enterApp = (u: UserInfo) => {
     setUser(u);
@@ -45,6 +56,9 @@ export default function App() {
   };
 
   if (phase === "loading") return <div className="auth-wrap">Loading…</div>;
+  if (licenseStatus?.status === "Expired") {
+    return <LicenseScreen onActivated={() => getLicenseStatus().then(setLicenseStatus)} />;
+  }
   if (phase === "setup") return <SetupScreen onReady={enterApp} />;
   if (phase === "login") return <LoginScreen onAuthed={enterApp} />;
 
@@ -52,6 +66,12 @@ export default function App() {
 
   return (
     <>
+      {licenseStatus?.status === "Trial" && (
+        <div className="trial-banner">
+          Trial — {licenseStatus.days_remaining} day{licenseStatus.days_remaining === 1 ? "" : "s"} remaining.
+          Contact your provider for a license key.
+        </div>
+      )}
       <header className="app-header">
         <span className="brand">Clinic Card Management</span>
         <nav>
