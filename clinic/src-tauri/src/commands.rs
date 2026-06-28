@@ -7,6 +7,7 @@ use crate::audit;
 use crate::auth::{AuthStore, Role, Session};
 use crate::backup;
 use crate::import;
+use crate::license::LicenseStatus;
 use crate::patient::{self, Patient, PatientInput};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use tauri::State;
 pub struct AppState {
     data_dir: PathBuf,
     active: Mutex<Option<Active>>,
+    license_checker: fn() -> Result<LicenseStatus, String>,
 }
 
 struct Active {
@@ -28,6 +30,18 @@ impl AppState {
         Self {
             data_dir,
             active: Mutex::new(None),
+            license_checker: crate::license::check_status,
+        }
+    }
+    #[cfg(test)]
+    fn new_with_license_checker(
+        data_dir: PathBuf,
+        license_checker: fn() -> Result<LicenseStatus, String>,
+    ) -> Self {
+        Self {
+            data_dir,
+            active: Mutex::new(None),
+            license_checker,
         }
     }
     fn auth_path(&self) -> PathBuf {
@@ -58,10 +72,54 @@ pub struct UserInfo {
     pub role: Role,
 }
 
-fn open_session(state: &State<AppState>, session: Session) -> Result<(), String> {
+fn require_active_license(state: &AppState) -> Result<(), String> {
+    match (state.license_checker)()? {
+        LicenseStatus::Licensed | LicenseStatus::Trial { .. } => Ok(()),
+        LicenseStatus::Expired => Err("License expired".into()),
+    }
+}
+
+fn login_impl(state: &AppState, username: String, password: String) -> Result<UserInfo, String> {
+    require_active_license(state)?;
+    let store = AuthStore::load(&state.auth_path())?;
+    let session = match store.login(&username, &password) {
+        Ok(s) => s,
+        Err(e) => {
+            state.audit(&username, "-", "LOGIN_FAILED", "");
+            return Err(e);
+        }
+    };
+    let info = UserInfo {
+        username: session.username.clone(),
+        role: session.role,
+    };
+    let role = session.role;
     let conn = crate::db::open(&state.db_path(), &session.master_key).map_err(|e| e.to_string())?;
     *state.active.lock().unwrap() = Some(Active { session, conn });
-    Ok(())
+    state.audit(&info.username, role_str(role), "LOGIN", "");
+    Ok(info)
+}
+
+fn initialize_admin_impl(
+    state: &AppState,
+    username: String,
+    password: String,
+) -> Result<UserInfo, String> {
+    require_active_license(state)?;
+    std::fs::create_dir_all(&state.data_dir).map_err(|e| e.to_string())?;
+    let (_, master_key) = AuthStore::initialize(&state.auth_path(), &username, &password)?;
+    let session = Session {
+        username: username.clone(),
+        role: Role::Admin,
+        master_key,
+    };
+    let conn = crate::db::open(&state.db_path(), &session.master_key).map_err(|e| e.to_string())?;
+    *state.active.lock().unwrap() = Some(Active { session, conn });
+    state.audit(&username, "Admin", "SETUP_ADMIN", "");
+    Ok(UserInfo {
+        username,
+        role: Role::Admin,
+    })
 }
 
 // --- auth / session ---------------------------------------------------------
@@ -77,19 +135,7 @@ pub fn initialize_admin(
     username: String,
     password: String,
 ) -> Result<UserInfo, String> {
-    std::fs::create_dir_all(&state.data_dir).map_err(|e| e.to_string())?;
-    let (_, master_key) = AuthStore::initialize(&state.auth_path(), &username, &password)?;
-    let session = Session {
-        username: username.clone(),
-        role: Role::Admin,
-        master_key,
-    };
-    open_session(&state, session)?;
-    state.audit(&username, "Admin", "SETUP_ADMIN", "");
-    Ok(UserInfo {
-        username,
-        role: Role::Admin,
-    })
+    initialize_admin_impl(&state, username, password)
 }
 
 #[tauri::command]
@@ -98,22 +144,7 @@ pub fn login(
     username: String,
     password: String,
 ) -> Result<UserInfo, String> {
-    let store = AuthStore::load(&state.auth_path())?;
-    let session = match store.login(&username, &password) {
-        Ok(s) => s,
-        Err(e) => {
-            state.audit(&username, "-", "LOGIN_FAILED", "");
-            return Err(e);
-        }
-    };
-    let info = UserInfo {
-        username: session.username.clone(),
-        role: session.role,
-    };
-    let role = session.role;
-    open_session(&state, session)?;
-    state.audit(&info.username, role_str(role), "LOGIN", "");
-    Ok(info)
+    login_impl(&state, username, password)
 }
 
 #[tauri::command]
@@ -143,6 +174,7 @@ pub fn current_user(state: State<AppState>) -> Option<UserInfo> {
 
 /// Returns (acting username, master key) if the current user is an Admin.
 fn require_admin(state: &State<AppState>) -> Result<(String, [u8; 32]), String> {
+    require_active_license(state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     if active.session.role != Role::Admin {
@@ -204,6 +236,7 @@ pub fn change_password(
     old_password: String,
     new_password: String,
 ) -> Result<(), String> {
+    require_active_license(&state)?;
     let (username, role) = {
         let guard = state.active.lock().unwrap();
         let active = guard.as_ref().ok_or("Not logged in")?;
@@ -219,6 +252,7 @@ pub fn change_password(
 
 #[tauri::command]
 pub fn register_patient(state: State<AppState>, input: PatientInput) -> Result<Patient, String> {
+    require_active_license(&state)?;
     let mut guard = state.active.lock().unwrap();
     let active = guard.as_mut().ok_or("Not logged in")?;
     let actor = active.session.username.clone();
@@ -230,35 +264,44 @@ pub fn register_patient(state: State<AppState>, input: PatientInput) -> Result<P
 }
 
 #[tauri::command]
-pub fn update_patient(
-    state: State<AppState>,
-    id: i64,
-    input: PatientInput,
-) -> Result<(), String> {
+pub fn update_patient(state: State<AppState>, id: i64, input: PatientInput) -> Result<(), String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     let actor = active.session.username.clone();
     let role = active.session.role;
     patient::update(&active.conn, id, &input, &actor)?;
-    state.audit(&actor, role_str(role), "EDIT", &patient::card_of(&active.conn, id));
+    state.audit(
+        &actor,
+        role_str(role),
+        "EDIT",
+        &patient::card_of(&active.conn, id),
+    );
     state.run_backups(&active.conn);
     Ok(())
 }
 
 #[tauri::command]
 pub fn delete_patient(state: State<AppState>, id: i64) -> Result<(), String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     let actor = active.session.username.clone();
     let role = active.session.role;
     patient::soft_delete(&active.conn, id, &actor)?;
-    state.audit(&actor, role_str(role), "DELETE", &patient::card_of(&active.conn, id));
+    state.audit(
+        &actor,
+        role_str(role),
+        "DELETE",
+        &patient::card_of(&active.conn, id),
+    );
     state.run_backups(&active.conn);
     Ok(())
 }
 
 #[tauri::command]
 pub fn list_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     patient::list_all(&active.conn)
@@ -266,6 +309,7 @@ pub fn list_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
 
 #[tauri::command]
 pub fn search_patients(state: State<AppState>, query: String) -> Result<Vec<Patient>, String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     patient::search(&active.conn, &query)
@@ -273,6 +317,7 @@ pub fn search_patients(state: State<AppState>, query: String) -> Result<Vec<Pati
 
 #[tauri::command]
 pub fn get_patient(state: State<AppState>, id: i64) -> Result<Option<Patient>, String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     patient::get_by_id(&active.conn, id)
@@ -283,6 +328,7 @@ pub fn check_duplicates(
     state: State<AppState>,
     input: PatientInput,
 ) -> Result<Vec<Patient>, String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     patient::find_duplicates(&active.conn, &input)
@@ -292,6 +338,7 @@ pub fn check_duplicates(
 
 #[tauri::command]
 pub fn list_deleted_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     patient::list_deleted(&active.conn)
@@ -299,18 +346,25 @@ pub fn list_deleted_patients(state: State<AppState>) -> Result<Vec<Patient>, Str
 
 #[tauri::command]
 pub fn restore_patient(state: State<AppState>, id: i64) -> Result<(), String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     let actor = active.session.username.clone();
     let role = role_str(active.session.role);
     patient::restore(&active.conn, id)?;
-    state.audit(&actor, role, "RESTORE_PATIENT", &patient::card_of(&active.conn, id));
+    state.audit(
+        &actor,
+        role,
+        "RESTORE_PATIENT",
+        &patient::card_of(&active.conn, id),
+    );
     state.run_backups(&active.conn);
     Ok(())
 }
 
 #[tauri::command]
 pub fn purge_patient(state: State<AppState>, id: i64) -> Result<(), String> {
+    require_active_license(&state)?;
     let guard = state.active.lock().unwrap();
     let active = guard.as_ref().ok_or("Not logged in")?;
     if active.session.role != Role::Admin {
@@ -398,7 +452,10 @@ pub fn restore_apply(
 // --- import / export (Admin only) ------------------------------------------
 
 #[tauri::command]
-pub fn import_preview(state: State<AppState>, path: String) -> Result<import::ImportPreview, String> {
+pub fn import_preview(
+    state: State<AppState>,
+    path: String,
+) -> Result<import::ImportPreview, String> {
     require_admin(&state)?;
     import::preview(Path::new(&path))
 }
@@ -418,7 +475,11 @@ pub fn import_apply(
         &actor,
         "Admin",
         "IMPORT",
-        &format!("{} imported, {} skipped", report.imported, report.skipped.len()),
+        &format!(
+            "{} imported, {} skipped",
+            report.imported,
+            report.skipped.len()
+        ),
     );
     state.run_backups(&active.conn);
     Ok(report)
@@ -470,4 +531,76 @@ pub fn get_license_status() -> Result<crate::license::LicenseStatus, String> {
 #[tauri::command]
 pub fn activate_license(key: String) -> Result<(), String> {
     crate::license::activate(&key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expired_license() -> Result<LicenseStatus, String> {
+        Ok(LicenseStatus::Expired)
+    }
+
+    fn trial_license() -> Result<LicenseStatus, String> {
+        Ok(LicenseStatus::Trial { days_remaining: 1 })
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "clinic_commands_test_{}_{}",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        p
+    }
+
+    #[test]
+    fn initialize_admin_returns_error_when_license_expired() {
+        let dir = temp_dir("init_expired");
+        let state = AppState::new_with_license_checker(dir.clone(), expired_license);
+
+        let result = initialize_admin_impl(&state, "admin".into(), "secret1".into());
+
+        assert!(matches!(result, Err(ref e) if e == "License expired"));
+        assert!(!state.auth_path().exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn login_returns_error_when_license_expired() {
+        let dir = temp_dir("login_expired");
+        let state = AppState::new_with_license_checker(dir.clone(), expired_license);
+
+        let result = login_impl(&state, "admin".into(), "secret1".into());
+
+        assert!(matches!(result, Err(ref e) if e == "License expired"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn protected_command_gate_returns_error_when_license_expired() {
+        let state =
+            AppState::new_with_license_checker(temp_dir("protected_expired"), expired_license);
+
+        assert_eq!(
+            require_active_license(&state).unwrap_err(),
+            "License expired"
+        );
+    }
+
+    #[test]
+    fn protected_command_gate_allows_active_trial() {
+        let state = AppState::new_with_license_checker(temp_dir("protected_trial"), trial_license);
+
+        assert!(require_active_license(&state).is_ok());
+    }
+
+    #[test]
+    fn license_commands_remain_callable_without_app_state() {
+        assert!(!get_device_id().is_empty());
+        assert!(get_license_status().is_ok());
+        assert!(activate_license("not-a-valid-key".into()).is_err());
+    }
 }
