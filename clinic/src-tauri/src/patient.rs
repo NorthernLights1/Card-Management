@@ -133,7 +133,7 @@ fn assign_next_card(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
 }
 
 fn card_number(first: i64, sub: i64) -> String {
-    format!("{first}/{sub}")
+    if sub == 0 { format!("{first}") } else { format!("{first}/{sub}") }
 }
 
 // --- writes -----------------------------------------------------------------
@@ -305,7 +305,8 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Patient>, String> {
 /// Card number for a patient id (regardless of deleted state) — for the audit log.
 pub fn card_of(conn: &Connection, id: i64) -> String {
     conn.query_row(
-        "SELECT card_first || '/' || card_sub FROM patients WHERE id = ?1",
+        "SELECT CASE WHEN card_sub = 0 THEN CAST(card_first AS TEXT) \
+         ELSE card_first || '/' || card_sub END FROM patients WHERE id = ?1",
         params![id],
         |r| r.get::<_, String>(0),
     )
@@ -435,11 +436,14 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
 
 fn parse_card(s: &str) -> Result<(i64, i64), String> {
     let s = s.trim();
-    let (a, b) = s
-        .split_once('/')
-        .ok_or_else(|| format!("invalid card number '{s}'"))?;
-    let first: i64 = a.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
-    let sub: i64 = b.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
+    let (first, sub) = if let Some((a, b)) = s.split_once('/') {
+        let f: i64 = a.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
+        let u: i64 = b.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
+        (f, u)
+    } else {
+        let f: i64 = s.parse().map_err(|_| format!("invalid card number '{s}'"))?;
+        (f, 0)
+    };
     if first < 1 || !(0..=CARD_SUB_MAX).contains(&sub) {
         return Err(format!("card number out of range '{s}'"));
     }
@@ -644,7 +648,7 @@ mod tests {
         assert_eq!(
             numbers,
             vec![
-                "1/0", "1/1", "1/2", "1/3", "1/4", "1/5", "1/6", "1/7", "1/8", "2/0"
+                "1", "1/1", "1/2", "1/3", "1/4", "1/5", "1/6", "1/7", "1/8", "2"
             ]
         );
     }
@@ -653,10 +657,10 @@ mod tests {
     fn deleted_card_numbers_are_not_reused() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let first = create(&mut conn, &input("A", "B", "C", "0911111111"), "t").unwrap();
-        assert_eq!(first.card_number, "1/0");
+        assert_eq!(first.card_number, "1");
         soft_delete(&conn, first.id, "t").unwrap();
         let second = create(&mut conn, &input("D", "E", "F", "0911111112"), "t").unwrap();
-        assert_eq!(second.card_number, "1/1"); // not reusing 1/0
+        assert_eq!(second.card_number, "1/1"); // not reusing 1
     }
 
     #[test]
@@ -749,13 +753,13 @@ mod tests {
     fn purge_only_removes_deleted_and_never_reuses_number() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let p = create(&mut conn, &input("Gone", "X", "Y", "0911223344"), "t").unwrap();
-        assert_eq!(p.card_number, "1/0");
+        assert_eq!(p.card_number, "1");
         // cannot purge an active patient
         assert!(purge(&conn, p.id).is_err());
         soft_delete(&conn, p.id, "t").unwrap();
         purge(&conn, p.id).unwrap();
         assert_eq!(list_deleted(&conn).unwrap().len(), 0);
-        // next patient still gets 1/1, not the purged 1/0
+        // next patient still gets 1/1, not the purged 1
         let next = create(&mut conn, &input("New", "X", "Y", "0911223345"), "t").unwrap();
         assert_eq!(next.card_number, "1/1");
     }
@@ -773,10 +777,23 @@ mod tests {
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].row, 3);
         // the imported cards are searchable
-        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "5/0");
+        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "5");
         // next auto-assigned card continues after the highest imported (5/1 -> 5/2)
         let next = create(&mut conn, &input("New", "X", "Y", "0911111119"), "t").unwrap();
         assert_eq!(next.card_number, "5/2");
+    }
+
+    #[test]
+    fn parse_card_accepts_bare_integer_as_sub_zero() {
+        assert_eq!(parse_card("6045").unwrap(), (6045, 0));
+        assert_eq!(parse_card(" 100 ").unwrap(), (100, 0));
+    }
+
+    #[test]
+    fn card_number_omits_sub_when_zero() {
+        assert_eq!(card_number(6045, 0), "6045");
+        assert_eq!(card_number(6046, 1), "6046/1");
+        assert_eq!(card_number(6046, 8), "6046/8");
     }
 }
 
