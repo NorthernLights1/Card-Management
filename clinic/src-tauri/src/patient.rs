@@ -332,6 +332,22 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<Patient>, String> {
     if q.is_empty() {
         return Ok(Vec::new());
     }
+    if let Ok((card_first, card_sub)) = parse_card(q) {
+        let exact = conn
+            .query_row(
+                &format!(
+                    "SELECT {COLS} FROM patients
+                     WHERE deleted_at IS NULL AND card_first = ?1 AND card_sub = ?2"
+                ),
+                params![card_first, card_sub],
+                row_to_patient,
+            )
+            .optional()
+            .map_err(e2s)?;
+        if let Some(patient) = exact {
+            return Ok(vec![patient]);
+        }
+    }
     let like = format!("%{q}%");
     let mut stmt = conn
         .prepare(&format!(
@@ -727,6 +743,19 @@ mod tests {
         assert_eq!(search(&conn, "1122").unwrap().len(), 1);
         assert_eq!(search(&conn, &p.card_number).unwrap().len(), 1);
         assert_eq!(search(&conn, "Nonexistent").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn search_prefers_exact_sub_zero_card_number() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let sub_zero = create(&mut conn, &input("Subzero", "A", "B", "0911111111"), "t").unwrap();
+        let sub_one = create(&mut conn, &input("Subone", "A", "B", "0911111112"), "t").unwrap();
+
+        assert_eq!(sub_zero.card_number, "1");
+        assert_eq!(sub_one.card_number, "1/1");
+        let results = search(&conn, "1").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].card_number, "1");
     }
 
     #[test]
