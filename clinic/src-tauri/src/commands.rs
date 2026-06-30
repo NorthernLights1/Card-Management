@@ -307,6 +307,25 @@ pub fn list_patients(state: State<AppState>) -> Result<Vec<Patient>, String> {
     patient::list_all(&active.conn)
 }
 
+#[derive(serde::Serialize)]
+pub struct PatientPage {
+    pub patients: Vec<Patient>,
+    pub total: i64,
+}
+
+#[tauri::command]
+pub fn list_patients_page(
+    state: State<AppState>,
+    offset: i64,
+    limit: i64,
+) -> Result<PatientPage, String> {
+    require_active_license(&state)?;
+    let guard = state.active.lock().unwrap();
+    let active = guard.as_ref().ok_or("Not logged in")?;
+    let (patients, total) = patient::list_page(&active.conn, offset, limit)?;
+    Ok(PatientPage { patients, total })
+}
+
 #[tauri::command]
 pub fn search_patients(state: State<AppState>, query: String) -> Result<Vec<Patient>, String> {
     require_active_license(&state)?;

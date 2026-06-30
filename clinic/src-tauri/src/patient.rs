@@ -5,11 +5,16 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-const CARD_SUB_MAX: i64 = 8; // numbering runs first/0 .. first/8, then (first+1)/0
+const CARD_SUB_MAX: i64 = 8;
+// Cards 1..CARD_PLAIN_MAX use plain sequential numbering (sub always 0).
+// From CARD_PLAIN_MAX+1 onwards, sub cycles 0-8 before first increments.
+const CARD_PLAIN_MAX: i64 = 6045;
 
-/// The next card number after (first, sub): sub wraps 0..8, then first increments.
 fn advance_card(first: i64, sub: i64) -> (i64, i64) {
-    if sub < CARD_SUB_MAX {
+    if first <= CARD_PLAIN_MAX {
+        // plain range: just increment first, sub stays 0
+        (first + 1, 0)
+    } else if sub < CARD_SUB_MAX {
         (first, sub + 1)
     } else {
         (first + 1, 0)
@@ -293,11 +298,31 @@ pub fn list_deleted(conn: &Connection) -> Result<Vec<Patient>, String> {
 pub fn list_all(conn: &Connection) -> Result<Vec<Patient>, String> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL ORDER BY card_first, card_sub LIMIT 5000"
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL ORDER BY card_first, card_sub"
         ))
         .map_err(e2s)?;
     let rows = stmt.query_map([], row_to_patient).map_err(e2s)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
+}
+
+/// One page of active patients plus the total active count.
+pub fn list_page(conn: &Connection, offset: i64, limit: i64) -> Result<(Vec<Patient>, i64), String> {
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(e2s)?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM patients WHERE deleted_at IS NULL \
+             ORDER BY card_first, card_sub LIMIT ?1 OFFSET ?2"
+        ))
+        .map_err(e2s)?;
+    let rows = stmt.query_map(params![limit, offset], row_to_patient).map_err(e2s)?;
+    let patients = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)?;
+    Ok((patients, total))
 }
 
 // --- reads ------------------------------------------------------------------
@@ -398,10 +423,9 @@ pub fn find_duplicates(conn: &Connection, input: &PatientInput) -> Result<Vec<Pa
 
 // --- import / export --------------------------------------------------------
 
-/// One row to import, with the existing card number preserved from the source.
+/// One row to import; card number is auto-assigned in row order.
 pub struct ImportItem {
     pub row_index: usize,
-    pub card_number: String,
     pub input: PatientInput,
 }
 
@@ -417,9 +441,8 @@ pub struct SkippedRow {
     pub reason: String,
 }
 
-/// Import rows keeping their existing card numbers; reseed the counter to
-/// continue after the highest number. Invalid/duplicate rows are reported, not
-/// silently dropped.
+/// Import rows, auto-assigning card numbers in row order. Invalid rows are
+/// skipped and reported; valid rows get the next sequential card number.
 pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<ImportReport, String> {
     let now = now_string();
     let tx = conn.transaction().map_err(e2s)?;
@@ -430,22 +453,10 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
             skipped.push(SkippedRow { row: item.row_index, reason });
             continue;
         }
-        let (cf, cs) = match parse_card(&item.card_number) {
-            Ok(v) => v,
-            Err(reason) => {
-                skipped.push(SkippedRow { row: item.row_index, reason });
-                continue;
-            }
-        };
-        match insert_with_card(&tx, cf, cs, &item.input, &now) {
-            Ok(()) => imported += 1,
-            Err(_) => skipped.push(SkippedRow {
-                row: item.row_index,
-                reason: format!("card {} already exists", item.card_number),
-            }),
-        }
+        let (cf, cs) = assign_next_card(&tx).map_err(e2s)?;
+        insert_with_card(&tx, cf, cs, &item.input, &now).map_err(e2s)?;
+        imported += 1;
     }
-    reseed_card_seq(&tx).map_err(e2s)?;
     tx.commit().map_err(e2s)?;
     Ok(ImportReport { imported, skipped })
 }
@@ -503,25 +514,6 @@ fn insert_with_card(
     Ok(())
 }
 
-/// Point the counter just past the highest card number currently stored.
-fn reseed_card_seq(tx: &Connection) -> rusqlite::Result<()> {
-    let max: Option<(i64, i64)> = tx
-        .query_row(
-            "SELECT card_first, card_sub FROM patients
-             ORDER BY card_first DESC, card_sub DESC LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    if let Some((f, s)) = max {
-        let (nf, ns) = advance_card(f, s);
-        tx.execute(
-            "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
-            params![nf, ns],
-        )?;
-    }
-    Ok(())
-}
 
 /// Write all active patients to a CSV file. Returns the row count.
 pub fn export_csv(conn: &Connection, path: &std::path::Path) -> Result<usize, String> {
@@ -652,19 +644,41 @@ mod tests {
         }
     }
 
+    fn set_card_seq(conn: &rusqlite::Connection, first: i64, sub: i64) {
+        conn.execute(
+            "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
+            params![first, sub],
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn card_numbers_run_1_0_through_1_8_then_2_0() {
+    fn card_numbers_plain_sequential_below_6046() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let mut numbers = Vec::new();
-        for i in 0..10 {
-            let p = create(&mut conn, &input("A", "B", &format!("C{i}"), "0911111111"), "tester")
-                .unwrap();
+        for i in 0..5 {
+            let p = create(&mut conn, &input("A", "B", &format!("C{i}"), "0911111111"), "t").unwrap();
+            numbers.push(p.card_number);
+        }
+        assert_eq!(numbers, vec!["1", "2", "3", "4", "5"]);
+    }
+
+    #[test]
+    fn card_numbers_sub_cycle_at_and_above_6046() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        set_card_seq(&conn, 6045, 0);
+        let mut numbers = Vec::new();
+        for i in 0..12 {
+            let phone = format!("091111{:04}", i);
+            let p = create(&mut conn, &input("A", "B", &format!("C{i}"), &phone), "t").unwrap();
             numbers.push(p.card_number);
         }
         assert_eq!(
             numbers,
             vec![
-                "1", "1/1", "1/2", "1/3", "1/4", "1/5", "1/6", "1/7", "1/8", "2"
+                "6045", "6046", "6046/1", "6046/2", "6046/3",
+                "6046/4", "6046/5", "6046/6", "6046/7", "6046/8",
+                "6047", "6047/1"
             ]
         );
     }
@@ -676,7 +690,7 @@ mod tests {
         assert_eq!(first.card_number, "1");
         soft_delete(&conn, first.id, "t").unwrap();
         let second = create(&mut conn, &input("D", "E", "F", "0911111112"), "t").unwrap();
-        assert_eq!(second.card_number, "1/1"); // not reusing 1
+        assert_eq!(second.card_number, "2"); // not reusing 1
     }
 
     #[test]
@@ -746,13 +760,13 @@ mod tests {
     }
 
     #[test]
-    fn search_prefers_exact_sub_zero_card_number() {
+    fn search_exact_card_number_returns_single_match() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
-        let sub_zero = create(&mut conn, &input("Subzero", "A", "B", "0911111111"), "t").unwrap();
-        let sub_one = create(&mut conn, &input("Subone", "A", "B", "0911111112"), "t").unwrap();
+        let first = create(&mut conn, &input("One", "A", "B", "0911111111"), "t").unwrap();
+        let _second = create(&mut conn, &input("Two", "A", "B", "0911111112"), "t").unwrap();
 
-        assert_eq!(sub_zero.card_number, "1");
-        assert_eq!(sub_one.card_number, "1/1");
+        assert_eq!(first.card_number, "1");
+        // searching "1" matches exactly (card_first=1, card_sub=0), not card "10", "11", etc.
         let results = search(&conn, "1").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].card_number, "1");
@@ -788,28 +802,29 @@ mod tests {
         soft_delete(&conn, p.id, "t").unwrap();
         purge(&conn, p.id).unwrap();
         assert_eq!(list_deleted(&conn).unwrap().len(), 0);
-        // next patient still gets 1/1, not the purged 1
+        // next patient still gets 2, not the purged 1
         let next = create(&mut conn, &input("New", "X", "Y", "0911223345"), "t").unwrap();
-        assert_eq!(next.card_number, "1/1");
+        assert_eq!(next.card_number, "2");
     }
 
     #[test]
-    fn import_keeps_card_numbers_reports_bad_rows_and_continues_sequence() {
+    fn import_auto_assigns_cards_skips_invalid_rows_and_continues_sequence() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let items = vec![
-            ImportItem { row_index: 1, card_number: "5/0".into(), input: input("Abel", "K", "T", "0911111111") },
-            ImportItem { row_index: 2, card_number: "5/1".into(), input: input("Sara", "K", "T", "0922222222") },
-            ImportItem { row_index: 3, card_number: "5/2".into(), input: input("Bad", "K", "T", "123") }, // bad phone
+            ImportItem { row_index: 1, input: input("Abel", "K", "T", "0911111111") },
+            ImportItem { row_index: 2, input: input("Sara", "K", "T", "0922222222") },
+            ImportItem { row_index: 3, input: input("Bad", "K", "T", "123") }, // bad phone — skipped
         ];
         let report = import_rows(&mut conn, &items).unwrap();
         assert_eq!(report.imported, 2);
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].row, 3);
-        // the imported cards are searchable
-        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "5");
-        // next auto-assigned card continues after the highest imported (5/1 -> 5/2)
+        // cards are auto-assigned in row order
+        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "1");
+        assert_eq!(search(&conn, "Sara").unwrap()[0].card_number, "2");
+        // sequence continues where import left off
         let next = create(&mut conn, &input("New", "X", "Y", "0911111119"), "t").unwrap();
-        assert_eq!(next.card_number, "5/2");
+        assert_eq!(next.card_number, "3");
     }
 
     #[test]

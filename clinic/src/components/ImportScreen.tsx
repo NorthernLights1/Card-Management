@@ -8,7 +8,6 @@ type Props = { onClose: () => void };
 type FieldDef = { key: keyof ImportMapping; label: string; required: boolean; syn: string[] };
 
 const FIELDS: FieldDef[] = [
-  { key: "card_number", label: "Card number", required: true, syn: ["card", "number", "cardno", "no"] },
   { key: "first_name", label: "First name", required: true, syn: ["first", "fname", "name"] },
   { key: "father_name", label: "Father's name", required: true, syn: ["father"] },
   { key: "grandfather_name", label: "Grandfather's name", required: true, syn: ["grandfather"] },
@@ -68,7 +67,6 @@ export function ImportScreen({ onClose }: Props) {
     setBusy(true);
     try {
       const m: ImportMapping = {
-        card_number: mapping.card_number,
         first_name: mapping.first_name,
         father_name: mapping.father_name,
         grandfather_name: mapping.grandfather_name,
@@ -95,8 +93,8 @@ export function ImportScreen({ onClose }: Props) {
         {!preview ? (
           <>
             <p className="muted">
-              Choose an Excel (.xlsx) or CSV file. The first row must be column headers, and each row
-              needs its existing card number. Ages are imported; dates of birth can be added later by editing.
+              Choose an Excel (.xlsx) or CSV file. The first row must be column headers. Card numbers
+              are assigned automatically in row order. Ages are imported; dates of birth can be added later by editing.
             </p>
             <div className="form-actions">
               <button className="ghost" onClick={onClose}>Cancel</button>

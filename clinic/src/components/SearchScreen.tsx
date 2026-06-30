@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Patient, Sex } from "../lib/api";
-import { deletePatient, listPatients, searchPatients } from "../lib/api";
+import { deletePatient, listPatientsPage, searchPatients } from "../lib/api";
 import { displayAge, displayDob, fullName } from "../lib/patientView";
+
+const PAGE_SIZE = 200;
 
 type Props = {
   onRegister: () => void;
@@ -10,6 +12,9 @@ type Props = {
 
 export function SearchScreen({ onRegister, onEdit }: Props) {
   const [allPatients, setAllPatients] = useState<Patient[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadedCount, setLoadedCount] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searchResults, setSearchResults] = useState<Patient[] | null>(null);
   const [query, setQuery] = useState("");
   const [sexFilter, setSexFilter] = useState<"" | Sex>("");
@@ -18,10 +23,27 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    listPatients()
-      .then(setAllPatients)
+    listPatientsPage(0, PAGE_SIZE)
+      .then(({ patients, total }) => {
+        setAllPatients(patients);
+        setTotal(total);
+        setLoadedCount(patients.length);
+      })
       .catch((e) => setError(String(e)));
   }, [reloadKey]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const { patients } = await listPatientsPage(loadedCount, PAGE_SIZE);
+      setAllPatients((prev) => [...prev, ...patients]);
+      setLoadedCount((prev) => prev + patients.length);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     const q = query.trim();
@@ -90,12 +112,14 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
       {error && <div className="banner error">{error}</div>}
 
       <div className="patient-count muted" style={{ padding: "4px 0 8px", fontSize: 13 }}>
-        {displayed.length === allPatients.length
-          ? `${allPatients.length} patient${allPatients.length === 1 ? "" : "s"}`
-          : `${displayed.length} of ${allPatients.length} patient${allPatients.length === 1 ? "" : "s"}`}
+        {searchResults
+          ? `${displayed.length} result${displayed.length === 1 ? "" : "s"}`
+          : displayed.length < total
+          ? `${displayed.length} of ${total} patient${total === 1 ? "" : "s"} (${total - loadedCount} not loaded)`
+          : `${total} patient${total === 1 ? "" : "s"}`}
       </div>
 
-      {displayed.length === 0 && allPatients.length === 0 ? (
+      {displayed.length === 0 && total === 0 ? (
         <div className="empty">No patients registered yet. Register the first one.</div>
       ) : displayed.length === 0 ? (
         <div className="empty">No patients match the current filters.</div>
@@ -118,6 +142,14 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
             </div>
           </div>
         ))
+      )}
+
+      {!searchResults && loadedCount < total && (
+        <div style={{ textAlign: "center", padding: "16px 0" }}>
+          <button className="ghost" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : `Load more (${total - loadedCount} remaining)`}
+          </button>
+        </div>
       )}
     </>
   );

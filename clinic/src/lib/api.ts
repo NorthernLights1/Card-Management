@@ -76,6 +76,10 @@ export const deletePatient = (id: number) =>
 
 export const listPatients = () => invoke<Patient[]>("list_patients");
 
+export type PatientPage = { patients: Patient[]; total: number };
+export const listPatientsPage = (offset: number, limit: number) =>
+  invoke<PatientPage>("list_patients_page", { offset, limit });
+
 export const searchPatients = (query: string) =>
   invoke<Patient[]>("search_patients", { query });
 
@@ -103,7 +107,6 @@ export const readAuditLog = () => invoke<string>("read_audit_log");
 // --- import / export (Admin only) ---
 export type ImportPreview = { headers: string[]; sample: string[][]; total_rows: number };
 export type ImportMapping = {
-  card_number: number;
   first_name: number;
   father_name: number;
   grandfather_name: number;

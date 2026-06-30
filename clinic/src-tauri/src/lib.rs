@@ -34,6 +34,7 @@ pub fn run() {
             commands::reset_user_password,
             commands::change_password,
             commands::list_patients,
+            commands::list_patients_page,
             commands::register_patient,
             commands::update_patient,
             commands::delete_patient,
