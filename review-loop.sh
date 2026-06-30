@@ -80,6 +80,12 @@ require_clean_tree_for_fix_pass() {
     echo "Commit or stash local changes, then rerun without --force/--allow-dirty so generated commits only contain loop fixes."
     exit 1
   fi
+
+  if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    echo "Refusing to run an automated fix pass while the working tree has uncommitted changes."
+    echo "Commit or stash local changes, then rerun so generated commits only contain loop fixes."
+    exit 1
+  fi
 }
 
 require_clean_tree_for_mergeable_result() {
