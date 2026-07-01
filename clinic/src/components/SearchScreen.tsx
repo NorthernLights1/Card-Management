@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Patient, Sex } from "../lib/api";
-import { deletePatient, listPatientsPage, searchPatients } from "../lib/api";
+import { deletePatient, listPatients, listPatientsPage, searchPatients } from "../lib/api";
 import { displayAge, displayDob, fullName } from "../lib/patientView";
 
 const PAGE_SIZE = 200;
@@ -19,6 +19,7 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
   const [query, setQuery] = useState("");
   const [sexFilter, setSexFilter] = useState<"" | Sex>("");
   const [cityFilter, setCityFilter] = useState("");
+  const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -45,6 +46,21 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
     }
   };
 
+  const loadAllPatients = async () => {
+    if (loadingAll || loadedCount >= total) return;
+    setLoadingAll(true);
+    try {
+      const patients = await listPatients();
+      setAllPatients(patients);
+      setTotal(patients.length);
+      setLoadedCount(patients.length);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingAll(false);
+    }
+  };
+
   useEffect(() => {
     const q = query.trim();
     if (q === "") {
@@ -59,6 +75,22 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
     }, 200);
     return () => { active = false; clearTimeout(id); };
   }, [query]);
+
+  useEffect(() => {
+    if ((!sexFilter && !cityFilter) || loadedCount >= total) return;
+    let active = true;
+    setLoadingAll(true);
+    listPatients()
+      .then((patients) => {
+        if (!active) return;
+        setAllPatients(patients);
+        setTotal(patients.length);
+        setLoadedCount(patients.length);
+      })
+      .catch((e) => { if (active) setError(String(e)); })
+      .finally(() => { if (active) setLoadingAll(false); });
+    return () => { active = false; };
+  }, [sexFilter, cityFilter, loadedCount, total]);
 
   const cities = useMemo(
     () => [...new Set(allPatients.map((p) => p.city).filter(Boolean) as string[])].sort(),
@@ -89,7 +121,7 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
           <option value="Male">Male</option>
           <option value="Female">Female</option>
         </select>
-        <select value={cityFilter} onChange={(e) => setCityFilter(e.target.value)}>
+        <select value={cityFilter} onFocus={loadAllPatients} onChange={(e) => setCityFilter(e.target.value)}>
           <option value="">All cities</option>
           {cities.map((c) => (
             <option key={c} value={c}>{c}</option>
@@ -112,14 +144,18 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
       {error && <div className="banner error">{error}</div>}
 
       <div className="patient-count muted" style={{ padding: "4px 0 8px", fontSize: 13 }}>
-        {searchResults
+        {loadingAll
+          ? "Loading all patients for filters…"
+          : searchResults
           ? `${displayed.length} result${displayed.length === 1 ? "" : "s"}`
           : displayed.length < total
           ? `${displayed.length} of ${total} patient${total === 1 ? "" : "s"} (${total - loadedCount} not loaded)`
           : `${total} patient${total === 1 ? "" : "s"}`}
       </div>
 
-      {displayed.length === 0 && total === 0 ? (
+      {loadingAll ? (
+        <div className="empty">Loading patients…</div>
+      ) : displayed.length === 0 && total === 0 ? (
         <div className="empty">No patients registered yet. Register the first one.</div>
       ) : displayed.length === 0 ? (
         <div className="empty">No patients match the current filters.</div>
@@ -144,7 +180,7 @@ export function SearchScreen({ onRegister, onEdit }: Props) {
         ))
       )}
 
-      {!searchResults && loadedCount < total && (
+      {!searchResults && !loadingAll && loadedCount < total && (
         <div style={{ textAlign: "center", padding: "16px 0" }}>
           <button className="ghost" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? "Loading…" : `Load more (${total - loadedCount} remaining)`}
