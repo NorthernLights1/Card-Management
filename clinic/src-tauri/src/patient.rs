@@ -408,6 +408,29 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<Patient>, String> {
             }
         }
     }
+    if let Ok((card_first, 0)) = parse_card(q) {
+        let like = format!("%{q}%");
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {COLS} FROM patients
+                 WHERE deleted_at IS NULL AND (
+                     first_name LIKE ?1 OR father_name LIKE ?1 OR grandfather_name LIKE ?1
+                     OR phone LIKE ?1
+                     OR (card_first = ?2 AND card_sub = 0)
+                 )
+                 ORDER BY CASE WHEN card_first = ?2 AND card_sub = 0 THEN 0 ELSE 1 END,
+                          card_first, card_sub
+                 LIMIT 100"
+            ))
+            .map_err(e2s)?;
+        let rows = stmt
+            .query_map(params![like, card_first], row_to_patient)
+            .map_err(e2s)?;
+        let patients = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)?;
+        if patients.iter().any(|p| p.card_number == q) {
+            return Ok(patients);
+        }
+    }
     let like = format!("%{q}%");
     let mut stmt = conn
         .prepare(&format!(
@@ -939,6 +962,28 @@ mod tests {
             results.iter().map(|p| p.id).collect::<Vec<_>>(),
             vec![first.id, second.id]
         );
+    }
+
+    #[test]
+    fn search_bare_numeric_visible_card_does_not_match_sub_cards() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let items = vec![
+            ImportItem {
+                row_index: 1,
+                card_number: "6046".into(),
+                input: input("Exact", "A", "B", "0911111111"),
+            },
+            ImportItem {
+                row_index: 2,
+                card_number: "6046/1".into(),
+                input: input("Sub", "A", "B", "0922222222"),
+            },
+        ];
+        assert_eq!(import_rows(&mut conn, &items).unwrap().imported, 2);
+
+        let matches = search(&conn, "6046").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].card_number, "6046");
     }
 
     #[test]
