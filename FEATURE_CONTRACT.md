@@ -62,7 +62,9 @@ compute from the EC DOB the same way.
     branch or make numbering uniform.
 - **Auto-assigned** — staff never type it.
 - Deleted numbers are **not reused** (stays aligned with the physical drawer).
-- Excel import **keeps existing card numbers**; sequence continues from the highest imported.
+- Excel import **keeps existing card numbers** when the file provides them, and **auto-assigns**
+  in row order when the card-number column is left unmapped or a cell is blank; the sequence
+  continues from the highest card either way.
 
 ---
 
@@ -177,7 +179,9 @@ All backups/exports are copies of the **already-encrypted** DB → encrypted aut
 - **Admin-only**, tucked away in an Admin/Settings area, not on the main screen.
 - Column-mapping step + per-row validation (names, sex, phone). Bad rows **reported and
   skipped**, not silently dropped.
-- **Keeps existing card numbers**; auto-sequence continues from the highest.
+- **Card number is optional in the mapping.** Mapped → existing numbers are preserved
+  (including `6046/1`-style sub-cards). Unmapped or blank cell → the number is auto-assigned
+  in row order. Auto-sequence continues from the highest card.
 
 ---
 
