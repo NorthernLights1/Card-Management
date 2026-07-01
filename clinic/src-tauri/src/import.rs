@@ -15,6 +15,7 @@ pub struct ImportPreview {
 /// Column indices (0-based) chosen by the user in the mapping step.
 #[derive(serde::Deserialize)]
 pub struct Mapping {
+    pub card_number: usize,
     pub first_name: usize,
     pub father_name: usize,
     pub grandfather_name: usize,
@@ -67,6 +68,7 @@ pub fn build_items(path: &Path, m: &Mapping) -> Result<Vec<ImportItem>, String> 
         };
         items.push(ImportItem {
             row_index: i + 1, // 1-based, header is row 1
+            card_number: cell(m.card_number),
             input,
         });
     }

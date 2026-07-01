@@ -22,6 +22,19 @@ fn advance_card(first: i64, sub: i64) -> (i64, i64) {
     }
 }
 
+fn normalize_next_card(first: i64, sub: i64) -> (i64, i64) {
+    if first <= CARD_PLAIN_MAX && sub > 0 {
+        (first + 1, 0)
+    } else {
+        (first, sub)
+    }
+}
+
+fn next_after_existing_card(first: i64, sub: i64) -> (i64, i64) {
+    let (next_first, next_sub) = advance_card(first, sub);
+    normalize_next_card(next_first, next_sub)
+}
+
 /// Ethiopian-calendar date (the only date the user enters; system timestamps are
 /// stored separately in system time).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -130,6 +143,7 @@ fn assign_next_card(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let (first, sub) = normalize_next_card(first, sub);
     let (next_first, next_sub) = advance_card(first, sub);
     conn.execute(
         "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
@@ -442,9 +456,10 @@ pub fn find_duplicates(conn: &Connection, input: &PatientInput) -> Result<Vec<Pa
 
 // --- import / export --------------------------------------------------------
 
-/// One row to import; card number is auto-assigned in row order.
+/// One row to import; card number is preserved from the source file.
 pub struct ImportItem {
     pub row_index: usize,
+    pub card_number: String,
     pub input: PatientInput,
 }
 
@@ -460,11 +475,13 @@ pub struct SkippedRow {
     pub reason: String,
 }
 
-/// Import rows, auto-assigning card numbers in row order. Invalid rows are
-/// skipped and reported; valid rows get the next sequential card number.
+/// Import rows, preserving source card numbers. Invalid rows are skipped and
+/// reported; valid rows reseed the automatic sequence so later registrations
+/// continue after the highest imported or existing card.
 pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<ImportReport, String> {
     let now = now_string();
     let tx = conn.transaction().map_err(e2s)?;
+    normalize_card_seq(&tx).map_err(e2s)?;
     let mut imported = 0usize;
     let mut skipped: Vec<SkippedRow> = Vec::new();
     for item in items {
@@ -475,12 +492,80 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
             });
             continue;
         }
-        let (cf, cs) = assign_next_card(&tx).map_err(e2s)?;
+        let (cf, cs) = match parse_card(&item.card_number) {
+            Ok(card) => card,
+            Err(reason) => {
+                skipped.push(SkippedRow {
+                    row: item.row_index,
+                    reason,
+                });
+                continue;
+            }
+        };
+        if card_exists(&tx, cf, cs).map_err(e2s)? {
+            skipped.push(SkippedRow {
+                row: item.row_index,
+                reason: format!("card number '{}' already exists", item.card_number.trim()),
+            });
+            continue;
+        }
         insert_with_card(&tx, cf, cs, &item.input, &now).map_err(e2s)?;
         imported += 1;
     }
+    reseed_card_seq(&tx).map_err(e2s)?;
     tx.commit().map_err(e2s)?;
     Ok(ImportReport { imported, skipped })
+}
+
+fn normalize_card_seq(conn: &Connection) -> rusqlite::Result<()> {
+    let (first, sub): (i64, i64) = conn.query_row(
+        "SELECT next_first, next_sub FROM card_seq WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let (next_first, next_sub) = normalize_next_card(first, sub);
+    if (next_first, next_sub) != (first, sub) {
+        conn.execute(
+            "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
+            params![next_first, next_sub],
+        )?;
+    }
+    Ok(())
+}
+
+fn card_exists(conn: &Connection, first: i64, sub: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM patients WHERE card_first = ?1 AND card_sub = ?2)",
+        params![first, sub],
+        |r| r.get(0),
+    )
+}
+
+fn reseed_card_seq(conn: &Connection) -> rusqlite::Result<()> {
+    let max_card: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT card_first, card_sub FROM patients ORDER BY card_first DESC, card_sub DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((max_first, max_sub)) = max_card else {
+        return Ok(());
+    };
+    let candidate = next_after_existing_card(max_first, max_sub);
+    let current: (i64, i64) = conn.query_row(
+        "SELECT next_first, next_sub FROM card_seq WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let current = normalize_next_card(current.0, current.1);
+    if candidate > current {
+        conn.execute(
+            "UPDATE card_seq SET next_first = ?1, next_sub = ?2 WHERE id = 1",
+            params![candidate.0, candidate.1],
+        )?;
+    }
+    Ok(())
 }
 
 fn parse_card(s: &str) -> Result<(i64, i64), String> {
@@ -722,6 +807,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_slash_card_seq_below_plain_limit_is_normalized() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        set_card_seq(&conn, 10, 5);
+
+        let p = create(&mut conn, &input("A", "B", "C", "0911111111"), "t").unwrap();
+        assert_eq!(p.card_number, "11");
+
+        let next = create(&mut conn, &input("D", "E", "F", "0911111112"), "t").unwrap();
+        assert_eq!(next.card_number, "12");
+    }
+
+    #[test]
     fn deleted_card_numbers_are_not_reused() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let first = create(&mut conn, &input("A", "B", "C", "0911111111"), "t").unwrap();
@@ -925,32 +1022,40 @@ mod tests {
     }
 
     #[test]
-    fn import_auto_assigns_cards_skips_invalid_rows_and_continues_sequence() {
+    fn import_preserves_cards_skips_invalid_rows_and_reseeds_sequence() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let items = vec![
             ImportItem {
                 row_index: 1,
+                card_number: "42".into(),
                 input: input("Abel", "K", "T", "0911111111"),
             },
             ImportItem {
                 row_index: 2,
+                card_number: "6046/3".into(),
                 input: input("Sara", "K", "T", "0922222222"),
             },
             ImportItem {
                 row_index: 3,
+                card_number: "43".into(),
                 input: input("Bad", "K", "T", "123"),
             }, // bad phone — skipped
+            ImportItem {
+                row_index: 4,
+                card_number: "bad-card".into(),
+                input: input("BadCard", "K", "T", "0933333333"),
+            },
         ];
         let report = import_rows(&mut conn, &items).unwrap();
         assert_eq!(report.imported, 2);
-        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped.len(), 2);
         assert_eq!(report.skipped[0].row, 3);
-        // cards are auto-assigned in row order
-        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "1");
-        assert_eq!(search(&conn, "Sara").unwrap()[0].card_number, "2");
-        // sequence continues where import left off
+        assert_eq!(report.skipped[1].row, 4);
+        assert_eq!(search(&conn, "Abel").unwrap()[0].card_number, "42");
+        assert_eq!(search(&conn, "Sara").unwrap()[0].card_number, "6046/3");
+        // sequence continues after the highest imported card
         let next = create(&mut conn, &input("New", "X", "Y", "0911111119"), "t").unwrap();
-        assert_eq!(next.card_number, "3");
+        assert_eq!(next.card_number, "6046/4");
     }
 
     #[test]
