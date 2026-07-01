@@ -357,7 +357,8 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<Patient>, String> {
     if q.is_empty() {
         return Ok(Vec::new());
     }
-    if let Ok((card_first, card_sub)) = parse_card(q) {
+    if q.contains('/') {
+        let (card_first, card_sub) = parse_card(q)?;
         let exact = conn
             .query_row(
                 &format!(
@@ -760,16 +761,18 @@ mod tests {
     }
 
     #[test]
-    fn search_exact_card_number_returns_single_match() {
+    fn search_bare_numeric_card_number_does_not_skip_phone_matches() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let first = create(&mut conn, &input("One", "A", "B", "0911111111"), "t").unwrap();
-        let _second = create(&mut conn, &input("Two", "A", "B", "0911111112"), "t").unwrap();
+        let second = create(&mut conn, &input("Two", "A", "B", "0911111112"), "t").unwrap();
 
         assert_eq!(first.card_number, "1");
-        // searching "1" matches exactly (card_first=1, card_sub=0), not card "10", "11", etc.
         let results = search(&conn, "1").unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].card_number, "1");
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results.iter().map(|p| p.id).collect::<Vec<_>>(),
+            vec![first.id, second.id]
+        );
     }
 
     #[test]
