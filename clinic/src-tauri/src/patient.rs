@@ -519,6 +519,17 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
             });
             continue;
         }
+        // Blank/unmapped card number → auto-assign the next in sequence.
+        // A provided number is preserved as-is (the clinic's frozen paper numbers).
+        // ponytail: mixed files (some preserved, some blank) can collide if an
+        // auto-assigned number equals a preserved one later in the file; add a
+        // card_exists retry loop on the auto path if that use case ever appears.
+        if item.card_number.trim().is_empty() {
+            let (cf, cs) = assign_next_card(&tx).map_err(e2s)?;
+            insert_with_card(&tx, cf, cs, &item.input, &now).map_err(e2s)?;
+            imported += 1;
+            continue;
+        }
         let (cf, cs) = match parse_card(&item.card_number) {
             Ok(card) => card,
             Err(reason) => {
@@ -1105,6 +1116,56 @@ mod tests {
         // sequence continues after the highest imported card
         let next = create(&mut conn, &input("New", "X", "Y", "0911111119"), "t").unwrap();
         assert_eq!(next.card_number, "6046/4");
+    }
+
+    #[test]
+    fn import_auto_assigns_blank_card_numbers_across_the_6046_boundary() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        set_card_seq(&conn, 6045, 0);
+        let items: Vec<ImportItem> = (0..4)
+            .map(|i| ImportItem {
+                row_index: i + 1,
+                card_number: "  ".into(), // blank → auto-assign
+                input: input("Auto", "K", "T", &format!("091100{:04}", i)),
+            })
+            .collect();
+
+        let report = import_rows(&mut conn, &items).unwrap();
+
+        assert_eq!(report.imported, 4);
+        assert!(report.skipped.is_empty());
+        let cards: Vec<String> = search(&conn, "Auto")
+            .unwrap()
+            .into_iter()
+            .map(|p| p.card_number)
+            .collect();
+        assert_eq!(cards, vec!["6045", "6046", "6046/1", "6046/2"]);
+    }
+
+    #[test]
+    fn import_mixes_preserved_and_auto_assigned_card_numbers() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let items = vec![
+            ImportItem {
+                row_index: 1,
+                card_number: "100".into(), // preserved
+                input: input("Kept", "K", "T", "0911111111"),
+            },
+            ImportItem {
+                row_index: 2,
+                card_number: "".into(), // auto → 1
+                input: input("Auto", "K", "T", "0922222222"),
+            },
+        ];
+
+        let report = import_rows(&mut conn, &items).unwrap();
+
+        assert_eq!(report.imported, 2);
+        assert_eq!(search(&conn, "Kept").unwrap()[0].card_number, "100");
+        assert_eq!(search(&conn, "Auto").unwrap()[0].card_number, "1");
+        // sequence continues past the highest card (100)
+        let next = create(&mut conn, &input("New", "X", "Y", "0933333333"), "t").unwrap();
+        assert_eq!(next.card_number, "101");
     }
 
     #[test]

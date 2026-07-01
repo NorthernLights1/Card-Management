@@ -107,7 +107,7 @@ export const readAuditLog = () => invoke<string>("read_audit_log");
 // --- import / export (Admin only) ---
 export type ImportPreview = { headers: string[]; sample: string[][]; total_rows: number };
 export type ImportMapping = {
-  card_number: number;
+  card_number: number | null;
   first_name: number;
   father_name: number;
   grandfather_name: number;

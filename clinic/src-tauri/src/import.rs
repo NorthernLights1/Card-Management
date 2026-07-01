@@ -1,5 +1,6 @@
 //! Spreadsheet import (xlsx / xls / csv). Parsing lives here so the UI only does
-//! column mapping. Card numbers are auto-assigned in row order.
+//! column mapping. Card numbers are preserved when the file provides them and
+//! auto-assigned in row order when the column is unmapped or a cell is blank.
 
 use crate::patient::{ImportItem, PatientInput};
 use calamine::{open_workbook_auto, Data, Reader};
@@ -15,7 +16,7 @@ pub struct ImportPreview {
 /// Column indices (0-based) chosen by the user in the mapping step.
 #[derive(serde::Deserialize)]
 pub struct Mapping {
-    pub card_number: usize,
+    pub card_number: Option<usize>,
     pub first_name: usize,
     pub father_name: usize,
     pub grandfather_name: usize,
@@ -68,7 +69,7 @@ pub fn build_items(path: &Path, m: &Mapping) -> Result<Vec<ImportItem>, String> 
         };
         items.push(ImportItem {
             row_index: i + 1, // 1-based, header is row 1
-            card_number: cell(m.card_number),
+            card_number: opt_cell(m.card_number).unwrap_or_default(),
             input,
         });
     }
