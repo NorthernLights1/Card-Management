@@ -5,7 +5,7 @@ import { importApply, importPreview } from "../lib/api";
 
 type Props = { onClose: () => void };
 
-type ImportFieldKey = keyof ImportMapping | "card_number";
+type ImportFieldKey = keyof ImportMapping;
 type FieldDef = { key: ImportFieldKey; label: string; required: boolean; syn: string[] };
 
 const FIELDS: FieldDef[] = [
@@ -68,7 +68,7 @@ export function ImportScreen({ onClose }: Props) {
     setError(null);
     setBusy(true);
     try {
-      const m: ImportMapping & { card_number: number } = {
+      const m: ImportMapping = {
         card_number: mapping.card_number,
         first_name: mapping.first_name,
         father_name: mapping.father_name,
