@@ -9,6 +9,7 @@ const CARD_SUB_MAX: i64 = 8;
 // Cards 1..CARD_PLAIN_MAX use plain sequential numbering (sub always 0).
 // From CARD_PLAIN_MAX+1 onwards, sub cycles 0-8 before first increments.
 const CARD_PLAIN_MAX: i64 = 6045;
+const LIST_PAGE_LIMIT_MAX: i64 = 500;
 
 fn advance_card(first: i64, sub: i64) -> (i64, i64) {
     if first <= CARD_PLAIN_MAX {
@@ -138,7 +139,11 @@ fn assign_next_card(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
 }
 
 fn card_number(first: i64, sub: i64) -> String {
-    if sub == 0 { format!("{first}") } else { format!("{first}/{sub}") }
+    if sub == 0 {
+        format!("{first}")
+    } else {
+        format!("{first}/{sub}")
+    }
 }
 
 // --- writes -----------------------------------------------------------------
@@ -306,7 +311,19 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Patient>, String> {
 }
 
 /// One page of active patients plus the total active count.
-pub fn list_page(conn: &Connection, offset: i64, limit: i64) -> Result<(Vec<Patient>, i64), String> {
+pub fn list_page(
+    conn: &Connection,
+    offset: i64,
+    limit: i64,
+) -> Result<(Vec<Patient>, i64), String> {
+    if offset < 0 {
+        return Err("Offset must be non-negative".into());
+    }
+    if limit <= 0 {
+        return Err("Limit must be greater than zero".into());
+    }
+    let limit = limit.min(LIST_PAGE_LIMIT_MAX);
+
     let total: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM patients WHERE deleted_at IS NULL",
@@ -320,7 +337,9 @@ pub fn list_page(conn: &Connection, offset: i64, limit: i64) -> Result<(Vec<Pati
              ORDER BY card_first, card_sub LIMIT ?1 OFFSET ?2"
         ))
         .map_err(e2s)?;
-    let rows = stmt.query_map(params![limit, offset], row_to_patient).map_err(e2s)?;
+    let rows = stmt
+        .query_map(params![limit, offset], row_to_patient)
+        .map_err(e2s)?;
     let patients = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)?;
     Ok((patients, total))
 }
@@ -358,20 +377,21 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<Patient>, String> {
         return Ok(Vec::new());
     }
     if q.contains('/') {
-        let (card_first, card_sub) = parse_card(q)?;
-        let exact = conn
-            .query_row(
-                &format!(
-                    "SELECT {COLS} FROM patients
-                     WHERE deleted_at IS NULL AND card_first = ?1 AND card_sub = ?2"
-                ),
-                params![card_first, card_sub],
-                row_to_patient,
-            )
-            .optional()
-            .map_err(e2s)?;
-        if let Some(patient) = exact {
-            return Ok(vec![patient]);
+        if let Ok((card_first, card_sub)) = parse_card(q) {
+            let exact = conn
+                .query_row(
+                    &format!(
+                        "SELECT {COLS} FROM patients
+                         WHERE deleted_at IS NULL AND card_first = ?1 AND card_sub = ?2"
+                    ),
+                    params![card_first, card_sub],
+                    row_to_patient,
+                )
+                .optional()
+                .map_err(e2s)?;
+            if let Some(patient) = exact {
+                return Ok(vec![patient]);
+            }
         }
     }
     let like = format!("%{q}%");
@@ -387,9 +407,7 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<Patient>, String> {
              LIMIT 100"
         ))
         .map_err(e2s)?;
-    let rows = stmt
-        .query_map(params![like], row_to_patient)
-        .map_err(e2s)?;
+    let rows = stmt.query_map(params![like], row_to_patient).map_err(e2s)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(e2s)
 }
 
@@ -451,7 +469,10 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
     let mut skipped: Vec<SkippedRow> = Vec::new();
     for item in items {
         if let Err(reason) = validate(&item.input) {
-            skipped.push(SkippedRow { row: item.row_index, reason });
+            skipped.push(SkippedRow {
+                row: item.row_index,
+                reason,
+            });
             continue;
         }
         let (cf, cs) = assign_next_card(&tx).map_err(e2s)?;
@@ -465,11 +486,19 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
 fn parse_card(s: &str) -> Result<(i64, i64), String> {
     let s = s.trim();
     let (first, sub) = if let Some((a, b)) = s.split_once('/') {
-        let f: i64 = a.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
-        let u: i64 = b.trim().parse().map_err(|_| format!("invalid card number '{s}'"))?;
+        let f: i64 = a
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid card number '{s}'"))?;
+        let u: i64 = b
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid card number '{s}'"))?;
         (f, u)
     } else {
-        let f: i64 = s.parse().map_err(|_| format!("invalid card number '{s}'"))?;
+        let f: i64 = s
+            .parse()
+            .map_err(|_| format!("invalid card number '{s}'"))?;
         (f, 0)
     };
     if first < 1 || !(0..=CARD_SUB_MAX).contains(&sub) {
@@ -500,13 +529,18 @@ fn insert_with_card(
              address, city, registered_at, created_by)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'import')",
         params![
-            cf, cs,
+            cf,
+            cs,
             input.first_name.trim(),
             input.father_name.trim(),
             input.grandfather_name.trim(),
             input.sex,
             input.phone,
-            dy, dm, dd, age, age_on,
+            dy,
+            dm,
+            dd,
+            age,
+            age_on,
             opt_trim(&input.address),
             opt_trim(&input.city),
             now,
@@ -514,7 +548,6 @@ fn insert_with_card(
     )?;
     Ok(())
 }
-
 
 /// Write all active patients to a CSV file. Returns the row count.
 pub fn export_csv(conn: &Connection, path: &std::path::Path) -> Result<usize, String> {
@@ -658,7 +691,12 @@ mod tests {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let mut numbers = Vec::new();
         for i in 0..5 {
-            let p = create(&mut conn, &input("A", "B", &format!("C{i}"), "0911111111"), "t").unwrap();
+            let p = create(
+                &mut conn,
+                &input("A", "B", &format!("C{i}"), "0911111111"),
+                "t",
+            )
+            .unwrap();
             numbers.push(p.card_number);
         }
         assert_eq!(numbers, vec!["1", "2", "3", "4", "5"]);
@@ -677,9 +715,8 @@ mod tests {
         assert_eq!(
             numbers,
             vec![
-                "6045", "6046", "6046/1", "6046/2", "6046/3",
-                "6046/4", "6046/5", "6046/6", "6046/7", "6046/8",
-                "6047", "6047/1"
+                "6045", "6046", "6046/1", "6046/2", "6046/3", "6046/4", "6046/5", "6046/6",
+                "6046/7", "6046/8", "6047", "6047/1"
             ]
         );
     }
@@ -704,7 +741,13 @@ mod tests {
 
     #[test]
     fn phone_validation_rejects_bad_numbers() {
-        for bad in ["091111111", "08911111111", "0911a11111", "1911111111", "09111111110"] {
+        for bad in [
+            "091111111",
+            "08911111111",
+            "0911a11111",
+            "1911111111",
+            "09111111110",
+        ] {
             let p = input("A", "B", "C", bad);
             assert!(validate(&p).is_err(), "should reject {bad}");
         }
@@ -716,7 +759,11 @@ mod tests {
         p.age = None;
         p.dob = None;
         assert!(validate(&p).is_err());
-        p.dob = Some(EcDate { year: 2000, month: 4, day: 15 });
+        p.dob = Some(EcDate {
+            year: 2000,
+            month: 4,
+            day: 15,
+        });
         assert!(validate(&p).is_ok());
     }
 
@@ -724,18 +771,35 @@ mod tests {
     fn rejects_invalid_ethiopian_dates() {
         let mut p = input("A", "B", "C", "0911111111");
         p.age = None;
-        p.dob = Some(EcDate { year: 2000, month: 14, day: 1 });
+        p.dob = Some(EcDate {
+            year: 2000,
+            month: 14,
+            day: 1,
+        });
         assert!(validate(&p).is_err());
-        p.dob = Some(EcDate { year: 2000, month: 13, day: 7 });
+        p.dob = Some(EcDate {
+            year: 2000,
+            month: 13,
+            day: 7,
+        });
         assert!(validate(&p).is_err());
-        p.dob = Some(EcDate { year: 2000, month: 13, day: 6 });
+        p.dob = Some(EcDate {
+            year: 2000,
+            month: 13,
+            day: 6,
+        });
         assert!(validate(&p).is_ok());
     }
 
     #[test]
     fn duplicate_detection_matches_name_or_phone() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
-        create(&mut conn, &input("Abel", "Kebede", "Tadesse", "0911111111"), "t").unwrap();
+        create(
+            &mut conn,
+            &input("Abel", "Kebede", "Tadesse", "0911111111"),
+            "t",
+        )
+        .unwrap();
 
         // same full name, different phone
         let same_name = input("abel", "kebede", "tadesse", "0922222222");
@@ -753,7 +817,12 @@ mod tests {
     #[test]
     fn search_finds_by_name_phone_and_card_number() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
-        let p = create(&mut conn, &input("Meron", "Alemu", "Tesfaye", "0911223344"), "t").unwrap();
+        let p = create(
+            &mut conn,
+            &input("Meron", "Alemu", "Tesfaye", "0911223344"),
+            "t",
+        )
+        .unwrap();
         assert_eq!(search(&conn, "Meron").unwrap().len(), 1);
         assert_eq!(search(&conn, "1122").unwrap().len(), 1);
         assert_eq!(search(&conn, &p.card_number).unwrap().len(), 1);
@@ -773,6 +842,51 @@ mod tests {
             results.iter().map(|p| p.id).collect::<Vec<_>>(),
             vec![first.id, second.id]
         );
+    }
+
+    #[test]
+    fn malformed_slash_search_falls_back_to_like_search() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let p = create(&mut conn, &input("A/B", "A", "B", "0911111111"), "t").unwrap();
+
+        let matches = search(&conn, "A/B").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, p.id);
+        assert!(search(&conn, "6046/x").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_page_rejects_negative_offset() {
+        let conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+
+        assert!(list_page(&conn, -1, 10).is_err());
+    }
+
+    #[test]
+    fn list_page_rejects_non_positive_limit() {
+        let conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+
+        assert!(list_page(&conn, 0, 0).is_err());
+        assert!(list_page(&conn, 0, -1).is_err());
+    }
+
+    #[test]
+    fn list_page_caps_over_limit_values() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        for i in 0..501 {
+            let phone = format!("091{i:07}");
+            create(
+                &mut conn,
+                &input("Paged", "A", &format!("B{i}"), &phone),
+                "t",
+            )
+            .unwrap();
+        }
+
+        let (patients, total) = list_page(&conn, 0, LIST_PAGE_LIMIT_MAX + 1).unwrap();
+
+        assert_eq!(total, 501);
+        assert_eq!(patients.len(), LIST_PAGE_LIMIT_MAX as usize);
     }
 
     #[test]
@@ -814,9 +928,18 @@ mod tests {
     fn import_auto_assigns_cards_skips_invalid_rows_and_continues_sequence() {
         let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
         let items = vec![
-            ImportItem { row_index: 1, input: input("Abel", "K", "T", "0911111111") },
-            ImportItem { row_index: 2, input: input("Sara", "K", "T", "0922222222") },
-            ImportItem { row_index: 3, input: input("Bad", "K", "T", "123") }, // bad phone — skipped
+            ImportItem {
+                row_index: 1,
+                input: input("Abel", "K", "T", "0911111111"),
+            },
+            ImportItem {
+                row_index: 2,
+                input: input("Sara", "K", "T", "0922222222"),
+            },
+            ImportItem {
+                row_index: 3,
+                input: input("Bad", "K", "T", "123"),
+            }, // bad phone — skipped
         ];
         let report = import_rows(&mut conn, &items).unwrap();
         assert_eq!(report.imported, 2);

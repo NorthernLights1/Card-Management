@@ -84,9 +84,7 @@ fn get_mobo_serial() -> Option<String> {
 #[cfg(windows)]
 fn get_machine_guid() -> Option<String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key = hklm
-        .open_subkey("SOFTWARE\\Microsoft\\Cryptography")
-        .ok()?;
+    let key = hklm.open_subkey("SOFTWARE\\Microsoft\\Cryptography").ok()?;
     key.get_value("MachineGuid").ok()
 }
 
@@ -187,7 +185,10 @@ fn read_trial(device_id: &str) -> Result<Option<TrialRecord>, String> {
 #[cfg(windows)]
 fn write_trial(start_date: &str, last_seen_date: &str, device_id: &str) -> Result<(), String> {
     let integrity = trial_integrity(device_id, start_date, last_seen_date);
-    write_reg_value("trial", &format!("{start_date}|{last_seen_date}|{integrity}"))
+    write_reg_value(
+        "trial",
+        &format!("{start_date}|{last_seen_date}|{integrity}"),
+    )
 }
 
 fn trial_status_for_elapsed_days(elapsed: i64) -> LicenseStatus {
@@ -279,22 +280,34 @@ mod tests {
 
     #[test]
     fn trial_starts_with_full_days_remaining() {
-        assert_eq!(trial_days_remaining(trial_status_for_elapsed_days(0)), Some(14));
+        assert_eq!(
+            trial_days_remaining(trial_status_for_elapsed_days(0)),
+            Some(14)
+        );
     }
 
     #[test]
     fn trial_allows_last_valid_day() {
-        assert_eq!(trial_days_remaining(trial_status_for_elapsed_days(13)), Some(1));
+        assert_eq!(
+            trial_days_remaining(trial_status_for_elapsed_days(13)),
+            Some(1)
+        );
     }
 
     #[test]
     fn trial_expires_at_fourteen_elapsed_days() {
-        assert!(matches!(trial_status_for_elapsed_days(14), LicenseStatus::Expired));
+        assert!(matches!(
+            trial_status_for_elapsed_days(14),
+            LicenseStatus::Expired
+        ));
     }
 
     #[test]
     fn trial_expires_when_clock_moves_before_start_date() {
-        assert!(matches!(trial_status_for_elapsed_days(-1), LicenseStatus::Expired));
+        assert!(matches!(
+            trial_status_for_elapsed_days(-1),
+            LicenseStatus::Expired
+        ));
     }
 
     #[test]
@@ -337,8 +350,14 @@ mod tests {
 
     #[test]
     fn normalize_key_strips_dashes_and_uppercases() {
-        assert_eq!(normalize_key("abcde-fghij-klmno-pqrst"), "ABCDEFGHIJKLMNOPQRST");
-        assert_eq!(normalize_key("ABCDE-FGHIJ-KLMNO-PQRST"), "ABCDEFGHIJKLMNOPQRST");
+        assert_eq!(
+            normalize_key("abcde-fghij-klmno-pqrst"),
+            "ABCDEFGHIJKLMNOPQRST"
+        );
+        assert_eq!(
+            normalize_key("ABCDE-FGHIJ-KLMNO-PQRST"),
+            "ABCDEFGHIJKLMNOPQRST"
+        );
     }
 
     #[test]

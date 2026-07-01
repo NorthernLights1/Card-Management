@@ -150,7 +150,9 @@ impl AuthStore {
         if new_password.len() < 4 {
             return Err("New password is too short".into());
         }
-        let user = self.find(username).ok_or_else(|| "User not found".to_string())?;
+        let user = self
+            .find(username)
+            .ok_or_else(|| "User not found".to_string())?;
         let role = user.role;
         let master_key =
             unwrap_key(old_password, user).map_err(|_| "Current password is wrong".to_string())?;
@@ -170,7 +172,9 @@ impl AuthStore {
         if new_password.len() < 4 {
             return Err("New password is too short".into());
         }
-        let user = self.find(username).ok_or_else(|| "User not found".to_string())?;
+        let user = self
+            .find(username)
+            .ok_or_else(|| "User not found".to_string())?;
         let role = user.role;
         self.users.retain(|u| u.username != username);
         self.insert_user(username, new_password, role, master_key)?;
@@ -259,7 +263,11 @@ mod tests {
 
     fn temp_path(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("clinic_auth_test_{}_{}.json", name, std::process::id()));
+        p.push(format!(
+            "clinic_auth_test_{}_{}.json",
+            name,
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&p);
         p
     }

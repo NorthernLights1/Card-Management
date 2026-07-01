@@ -43,7 +43,11 @@ pub fn build_items(path: &Path, m: &Mapping) -> Result<Vec<ImportItem>, String> 
     let rows = read_rows(path)?;
     let mut items = Vec::new();
     for (i, row) in rows.iter().enumerate().skip(1) {
-        let cell = |idx: usize| row.get(idx).map(|s| s.trim().to_string()).unwrap_or_default();
+        let cell = |idx: usize| {
+            row.get(idx)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        };
         let opt_cell = |o: Option<usize>| {
             o.and_then(|idx| row.get(idx))
                 .map(|s| s.trim().to_string())
