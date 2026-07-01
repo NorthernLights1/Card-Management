@@ -6,8 +6,12 @@
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 const CARD_SUB_MAX: i64 = 8;
-// Cards 1..CARD_PLAIN_MAX use plain sequential numbering (sub always 0).
-// From CARD_PLAIN_MAX+1 onwards, sub cycles 0-8 before first increments.
+// INTENTIONAL — CLIENT REQUIREMENT, not a bug. Do NOT simplify to uniform numbering.
+// Cards 1..=6045 are plain sequential (sub always 0): 1, 2, 3, … 6045 — the clinic's
+// pre-existing paper folders, frozen. From 6046 onwards sub cycles 0-8 before first
+// increments: 6046, 6046/1 … 6046/8, 6047, 6047/1 … The 6045/6046 boundary is where the
+// paper filing switched schemes. See FEATURE_CONTRACT.md §5. Removing the
+// `first <= CARD_PLAIN_MAX` branch below breaks 6045 real card numbers.
 const CARD_PLAIN_MAX: i64 = 6045;
 const LIST_PAGE_LIMIT_MAX: i64 = 500;
 

@@ -52,8 +52,14 @@ compute from the EC DOB the same way.
 
 ## 5. Card Numbering
 
-- Format `first/sub`. `sub` runs 0→8; when it passes 8, `first`+1 and `sub`→0.
-- `first` is **unbounded**: `1/0 … 1/8 → 2/0 … 9/8 → 10/0 …`. Starts at **`1/0`**.
+- **Two regimes (CLIENT REQUIREMENT — not a bug, do not "normalize"):**
+  - Cards **1 … 6045** are **plain sequential**, no sub: `1, 2, 3, … 6045`. These are
+    the pre-existing paper folders; their numbers are frozen.
+  - From **6046 onwards** `sub` cycles 0→8 before `first` increments:
+    `6046, 6046/1 … 6046/8 → 6047, 6047/1 … 6047/8 → 6048 …`.
+  - The `6045/6046` boundary is where the clinic's paper filing switched schemes. It is
+    intentional and lives in code as `CARD_PLAIN_MAX = 6045`. Do not remove the plain-range
+    branch or make numbering uniform.
 - **Auto-assigned** — staff never type it.
 - Deleted numbers are **not reused** (stays aligned with the physical drawer).
 - Excel import **keeps existing card numbers**; sequence continues from the highest imported.
@@ -222,8 +228,8 @@ language other than English.
 
 ## Decision Log (summary of choices made)
 
-- Card numbering: `first/sub`, sub 0–8, first unbounded, starts `1/0`, auto-assigned,
-  never reused.
+- Card numbering: **1–6045 plain sequential**, then **6046+** cycles `first/sub` with
+  sub 0–8. Auto-assigned, never reused. The 6045→6046 boundary is a client requirement.
 - Dates: DOB in Ethiopian calendar; all system timestamps in system clock time.
 - Age: stored with record date, computed live, auto-increments.
 - Patient form field order: first/father/grandfather names, sex, phone, age/DOB, city,

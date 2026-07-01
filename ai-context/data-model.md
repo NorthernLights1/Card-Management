@@ -46,8 +46,14 @@ CREATE TABLE card_seq (
 
 ## Card numbering
 
-Format: `{first}/{sub}`. Sub runs `0 → 8`; when sub would exceed 8, first increments
-and sub resets to 0. Sequence: `1/0, 1/1, … 1/8, 2/0, … 9/8, 10/0, …`
+Format: `{first}/{sub}` (sub 0 rendered as just `{first}`). **Two regimes, by client
+requirement** (`CARD_PLAIN_MAX = 6045`):
+- Cards **1–6045**: plain sequential, no sub — `1, 2, 3, … 6045`.
+- From **6046**: sub runs `0 → 8` before first increments —
+  `6046, 6046/1, … 6046/8, 6047, 6047/1, …`
+
+The 6045/6046 boundary is intentional (the paper filing switched schemes). Do not
+collapse it to uniform numbering.
 
 - Auto-assigned on register — staff never type it.
 - Deleted numbers are **not reused** (physical drawer stays in sync).
