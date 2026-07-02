@@ -536,6 +536,13 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
     normalize_card_seq(&tx).map_err(e2s)?;
     let mut imported = 0usize;
     let mut skipped: Vec<SkippedRow> = Vec::new();
+    // Two-phase so a provided card number always wins over an auto-assigned one,
+    // regardless of row order. Phase 1 inserts every row that carries a card number
+    // (reporting invalid/duplicate rows in row order) and defers the blank rows.
+    // Phase 2 auto-assigns the deferred rows, skipping any card already taken by an
+    // existing patient or a preserved number from phase 1. A single row can no
+    // longer collide-and-abort the whole import.
+    let mut deferred: Vec<&ImportItem> = Vec::new();
     for item in items {
         if let Err(reason) = validate(&item.input) {
             skipped.push(SkippedRow {
@@ -544,15 +551,10 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
             });
             continue;
         }
-        // Blank/unmapped card number → auto-assign the next in sequence.
-        // A provided number is preserved as-is (the clinic's frozen paper numbers).
-        // ponytail: mixed files (some preserved, some blank) can collide if an
-        // auto-assigned number equals a preserved one later in the file; add a
-        // card_exists retry loop on the auto path if that use case ever appears.
+        // Blank/unmapped card number → auto-assign in phase 2. A provided number is
+        // preserved as-is (the clinic's frozen paper numbers).
         if item.card_number.trim().is_empty() {
-            let (cf, cs) = assign_next_card(&tx).map_err(e2s)?;
-            insert_with_card(&tx, cf, cs, &item.input, &now).map_err(e2s)?;
-            imported += 1;
+            deferred.push(item);
             continue;
         }
         let (cf, cs) = match parse_card(&item.card_number) {
@@ -572,6 +574,19 @@ pub fn import_rows(conn: &mut Connection, items: &[ImportItem]) -> Result<Import
             });
             continue;
         }
+        insert_with_card(&tx, cf, cs, &item.input, &now).map_err(e2s)?;
+        imported += 1;
+    }
+    // Phase 2: auto-assign deferred (blank) rows in row order. The skip loop steps
+    // over any card already taken; it terminates because the sequence advances
+    // monotonically and the set of existing cards is finite.
+    for item in deferred {
+        let (cf, cs) = loop {
+            let (cf, cs) = assign_next_card(&tx).map_err(e2s)?;
+            if !card_exists(&tx, cf, cs).map_err(e2s)? {
+                break (cf, cs);
+            }
+        };
         insert_with_card(&tx, cf, cs, &item.input, &now).map_err(e2s)?;
         imported += 1;
     }
@@ -1191,6 +1206,60 @@ mod tests {
         // sequence continues past the highest card (100)
         let next = create(&mut conn, &input("New", "X", "Y", "0933333333"), "t").unwrap();
         assert_eq!(next.card_number, "101");
+    }
+
+    #[test]
+    fn import_provided_low_card_before_blank_does_not_abort() {
+        // Scenario 1: a provided card equal to what the sequence would auto-assign
+        // appears BEFORE a blank row. The blank row must skip the taken card, not
+        // collide and abort the whole import.
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let items = vec![
+            ImportItem {
+                row_index: 1,
+                card_number: "1".into(), // preserved, equals the next auto value
+                input: input("Kept", "K", "T", "0911111111"),
+            },
+            ImportItem {
+                row_index: 2,
+                card_number: "".into(), // auto → must become 2, not collide with 1
+                input: input("Auto", "K", "T", "0922222222"),
+            },
+        ];
+
+        let report = import_rows(&mut conn, &items).unwrap();
+
+        assert_eq!(report.imported, 2);
+        assert!(report.skipped.is_empty());
+        assert_eq!(search(&conn, "Kept").unwrap()[0].card_number, "1");
+        assert_eq!(search(&conn, "Auto").unwrap()[0].card_number, "2");
+    }
+
+    #[test]
+    fn import_blank_before_provided_preserves_the_provided_card() {
+        // Scenario 2: a blank row appears BEFORE a row that provides the card the
+        // blank would otherwise consume. The provided number must be preserved and
+        // the blank row auto-assigned to a different card.
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let items = vec![
+            ImportItem {
+                row_index: 1,
+                card_number: "".into(), // auto — must NOT steal card 1
+                input: input("Auto", "K", "T", "0911111111"),
+            },
+            ImportItem {
+                row_index: 2,
+                card_number: "1".into(), // preserved — must survive
+                input: input("Kept", "K", "T", "0922222222"),
+            },
+        ];
+
+        let report = import_rows(&mut conn, &items).unwrap();
+
+        assert_eq!(report.imported, 2);
+        assert!(report.skipped.is_empty());
+        assert_eq!(search(&conn, "Kept").unwrap()[0].card_number, "1");
+        assert_eq!(search(&conn, "Auto").unwrap()[0].card_number, "2");
     }
 
     #[test]
