@@ -667,6 +667,14 @@ fn parse_card(s: &str) -> Result<(i64, i64), String> {
     if first < 1 || !(0..=CARD_SUB_MAX).contains(&sub) {
         return Err(format!("card number out of range '{s}'"));
     }
+    // Invariant (see banner at CARD_PLAIN_MAX): cards 1..=6045 are plain sequential
+    // with no sub. A below-boundary slash card like "5/1" is not a valid card number
+    // in this system, so reject it here rather than let an import preserve it.
+    if first <= CARD_PLAIN_MAX && sub > 0 {
+        return Err(format!(
+            "card number '{s}' is invalid: cards up to {CARD_PLAIN_MAX} have no sub-number"
+        ));
+    }
     Ok((first, sub))
 }
 
@@ -1266,6 +1274,41 @@ mod tests {
     fn parse_card_accepts_bare_integer_as_sub_zero() {
         assert_eq!(parse_card("6045").unwrap(), (6045, 0));
         assert_eq!(parse_card(" 100 ").unwrap(), (100, 0));
+    }
+
+    #[test]
+    fn parse_card_rejects_below_boundary_slash_cards() {
+        // 1..=6045 are plain; a sub below the boundary is not a valid card.
+        assert!(parse_card("5/1").is_err());
+        assert!(parse_card("6045/1").is_err());
+        // The boundary itself and above still allow subs.
+        assert_eq!(parse_card("6046/1").unwrap(), (6046, 1));
+    }
+
+    #[test]
+    fn import_skips_below_boundary_slash_card_and_keeps_valid_rows() {
+        let mut conn = crate::db::open_in_memory(&TEST_KEY).unwrap();
+        let items = vec![
+            ImportItem {
+                row_index: 1,
+                card_number: "5/1".into(), // invalid: below-boundary slash → skipped
+                input: input("BadSub", "K", "T", "0911111111"),
+            },
+            ImportItem {
+                row_index: 2,
+                card_number: "6046/1".into(), // valid above-boundary sub-card
+                input: input("Good", "K", "T", "0922222222"),
+            },
+        ];
+
+        let report = import_rows(&mut conn, &items).unwrap();
+
+        assert_eq!(report.imported, 1);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].row, 1);
+        assert!(report.skipped[0].reason.contains("sub-number"));
+        assert_eq!(search(&conn, "Good").unwrap()[0].card_number, "6046/1");
+        assert!(search(&conn, "BadSub").unwrap().is_empty());
     }
 
     #[test]
