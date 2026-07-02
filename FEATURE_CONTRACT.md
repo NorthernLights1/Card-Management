@@ -70,11 +70,16 @@ compute from the EC DOB the same way.
 
 ## 6. Core Features
 
-- **6.1 Home / patient list:** on login, the home screen shows **all active patients**
-  (up to 5 000) in card-number order with a live count. Staff can filter by **Sex** and
-  **City** (City dropdown is populated from the real cities in the database). Typing in
-  the search box narrows the list to name parts, phone, or card number. The card number
-  is shown prominently on every row to support the reverse-lookup use-case.
+- **6.1 Home / patient list:** on login, the home screen loads the **first page of
+  active patients** (200) in card-number order and shows a live count of the form
+  "X of Y patients". A **Load more** button fetches the next page; the list scales to
+  the clinic's full roster (7 000+) without loading everything up front. Staff can filter
+  by **Sex** and **City**; applying either filter — or opening the City dropdown —
+  **loads the complete active list** so filtering and the City options cover every patient
+  (City dropdown is populated from the real cities in the database). Typing in the search
+  box narrows the list to name parts, phone, or card number (search always queries the
+  full database, not just loaded pages). The card number is shown prominently on every row
+  to support the reverse-lookup use-case.
 - **6.2 Register:** validated form; card number auto-assigned. **Duplicate warning** if
   **either** (first+father+grandfather names match) **or** (phone matches) an existing
   patient — matches shown, staff may still proceed.
