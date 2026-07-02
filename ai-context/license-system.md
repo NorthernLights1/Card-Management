@@ -69,15 +69,42 @@ getLicenseStatus()  →  licenseStatus state set
 On successful activation it calls `getLicenseStatus()` again to refresh, which then
 allows `isInitialized()` to run and the normal boot flow to proceed.
 
+### In-trial activation (Settings screen)
+
+During the Trial phase, `SettingsScreen` receives `licenseStatus` and
+`onLicenseActivated` props from `App.tsx`. It renders an **Activate License** card
+with a key input field. On success it calls `onLicenseActivated()`, which calls
+`getLicenseStatus().then(setLicenseStatus)` in `App.tsx` — the trial banner
+disappears immediately without requiring a restart.
+
+```
+User (during trial) → Settings → Activate License card
+  → types key → clicks Activate
+  → activateLicense(key) [Tauri command]
+  → onLicenseActivated() → getLicenseStatus() → licenseStatus = Licensed
+  → trial banner gone, Activate card gone
+```
+
+The `LicenseScreen` (shown only on expiry) still exists as a hard gate for users
+who didn't activate proactively.
+
 ## Registry layout
 
 ```
 HKCU\Software\ClinicApp\
     license  REG_SZ  "XXXXX-XXXXX-XXXXX-XXXXX"   (absent if not activated)
-    trial    REG_SZ  "2026-06-15|<sha256hex>"      (set on first run)
+    trial    REG_SZ  "YYYY-MM-DD|YYYY-MM-DD|<sha256hex>"  (3-part format with last-seen)
 ```
 
 ## Where device ID appears in the UI
 
 - **Settings screen** → "Device ID" section (visible to all roles, with copy button).
+- **Settings screen** → "Activate License" section (visible only during Trial).
 - **LicenseScreen** → shown when expired, same copy button.
+
+## Workaround (manual registry write)
+
+If the UI is inaccessible, activate directly via PowerShell:
+```powershell
+Set-ItemProperty -Path "HKCU:\Software\ClinicApp" -Name "license" -Value "XXXXX-XXXXX-XXXXX-XXXXX"
+```

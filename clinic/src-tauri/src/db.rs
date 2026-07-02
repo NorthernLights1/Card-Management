@@ -34,7 +34,9 @@ fn apply_key(conn: &Connection, key: &[u8; 32]) -> rusqlite::Result<()> {
 
 /// Touch the DB so a wrong key fails immediately (SQLCipher errors on first read).
 fn verify_key(conn: &Connection) -> rusqlite::Result<()> {
-    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))?;
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })?;
     Ok(())
 }
 

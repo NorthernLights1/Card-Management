@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { Role, UserInfo } from "../lib/api";
+import type { LicenseStatus, Role, UserInfo } from "../lib/api";
 import {
+  activateLicense,
   addUser,
   changePassword,
   getDeviceId,
@@ -12,11 +13,16 @@ import {
 type Props = {
   user: UserInfo;
   onBack: () => void;
+  licenseStatus: LicenseStatus;
+  onLicenseActivated: () => void;
 };
 
-export function SettingsScreen({ user, onBack }: Props) {
+export function SettingsScreen({ user, onBack, licenseStatus, onLicenseActivated }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [licenseKey, setLicenseKey] = useState("");
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseError, setLicenseError] = useState<string | null>(null);
   const [users, setUsers] = useState<UserInfo[] | null>(null);
   const [showAddUser, setShowAddUser] = useState(false);
   const [addForm, setAddForm] = useState({ username: "", password: "", role: "Staff" as Role });
@@ -49,6 +55,19 @@ export function SettingsScreen({ user, onBack }: Props) {
       setMessage(`User "${username}" removed.`);
       loadUsers();
     } catch (e) { setError(String(e)); }
+  };
+
+  const doActivateLicense = async () => {
+    setLicenseBusy(true);
+    setLicenseError(null);
+    try {
+      await activateLicense(licenseKey.trim());
+      onLicenseActivated();
+    } catch (e) {
+      setLicenseError(String(e));
+    } finally {
+      setLicenseBusy(false);
+    }
   };
 
   return (
@@ -120,6 +139,31 @@ export function SettingsScreen({ user, onBack }: Props) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {licenseStatus.status === "Trial" && (
+        <div className="form-card" style={{ marginTop: 16 }}>
+          <div className="section-title">Activate License</div>
+          <p className="muted">Enter your license key to activate before your trial expires.</p>
+          {licenseError && <div className="banner error">{licenseError}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={licenseKey}
+              onChange={(e) => setLicenseKey(e.target.value)}
+              placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+              style={{ fontFamily: "monospace", fontSize: 13 }}
+              onKeyDown={(e) => { if (e.key === "Enter" && licenseKey.trim()) doActivateLicense(); }}
+            />
+            <button
+              className="primary"
+              onClick={doActivateLicense}
+              disabled={licenseBusy || !licenseKey.trim()}
+              style={{ flexShrink: 0 }}
+            >
+              {licenseBusy ? "Activating…" : "Activate"}
+            </button>
+          </div>
         </div>
       )}
 

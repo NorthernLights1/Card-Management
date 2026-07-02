@@ -68,7 +68,9 @@ fn write_set(conn: &Connection, auth_path: &Path, dir: &Path) -> Result<(), Stri
     if auth_path.exists() {
         fs::copy(auth_path, dir.join("auth.json")).map_err(e2s)?;
     }
-    let today = chrono::Local::now().format("clinic_%Y-%m-%d.db").to_string();
+    let today = chrono::Local::now()
+        .format("clinic_%Y-%m-%d.db")
+        .to_string();
     let snapshot = dir.join(&today);
     if !snapshot.exists() {
         fs::copy(&live, &snapshot).map_err(e2s)?;
@@ -129,8 +131,14 @@ fn is_daily_snapshot(p: &Path) -> bool {
 pub fn set_usb(data_dir: &Path, drive: &str) -> Result<(), String> {
     let serial = volume_serial(drive).ok_or("Could not read that drive")?;
     let marker = Path::new(drive).join(MARKER_FILE);
-    fs::write(&marker, b"clinic backup target\n").map_err(|_| "Drive is not writable".to_string())?;
-    save_config(data_dir, &BackupConfig { usb_serial: Some(serial) })
+    fs::write(&marker, b"clinic backup target\n")
+        .map_err(|_| "Drive is not writable".to_string())?;
+    save_config(
+        data_dir,
+        &BackupConfig {
+            usb_serial: Some(serial),
+        },
+    )
 }
 
 /// The root path of the configured USB if it is currently connected (serial
@@ -356,7 +364,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("clinic_prune_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        for d in ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05", "2026-01-06", "2026-01-07"] {
+        for d in [
+            "2026-01-01",
+            "2026-01-02",
+            "2026-01-03",
+            "2026-01-04",
+            "2026-01-05",
+            "2026-01-06",
+            "2026-01-07",
+        ] {
             fs::write(dir.join(format!("clinic_{d}.db")), b"x").unwrap();
         }
         prune_daily(&dir, 5).unwrap();

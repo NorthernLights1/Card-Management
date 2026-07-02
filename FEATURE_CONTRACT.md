@@ -52,21 +52,34 @@ compute from the EC DOB the same way.
 
 ## 5. Card Numbering
 
-- Format `first/sub`. `sub` runs 0→8; when it passes 8, `first`+1 and `sub`→0.
-- `first` is **unbounded**: `1/0 … 1/8 → 2/0 … 9/8 → 10/0 …`. Starts at **`1/0`**.
+- **Two regimes (CLIENT REQUIREMENT — not a bug, do not "normalize"):**
+  - Cards **1 … 6045** are **plain sequential**, no sub: `1, 2, 3, … 6045`. These are
+    the pre-existing paper folders; their numbers are frozen.
+  - From **6046 onwards** `sub` cycles 0→8 before `first` increments:
+    `6046, 6046/1 … 6046/8 → 6047, 6047/1 … 6047/8 → 6048 …`.
+  - The `6045/6046` boundary is where the clinic's paper filing switched schemes. It is
+    intentional and lives in code as `CARD_PLAIN_MAX = 6045`. Do not remove the plain-range
+    branch or make numbering uniform.
 - **Auto-assigned** — staff never type it.
 - Deleted numbers are **not reused** (stays aligned with the physical drawer).
-- Excel import **keeps existing card numbers**; sequence continues from the highest imported.
+- Excel import **keeps existing card numbers** when the file provides them, and **auto-assigns**
+  in row order when the card-number column is left unmapped or a cell is blank; the sequence
+  continues from the highest card either way.
 
 ---
 
 ## 6. Core Features
 
-- **6.1 Home / patient list:** on login, the home screen shows **all active patients**
-  (up to 5 000) in card-number order with a live count. Staff can filter by **Sex** and
-  **City** (City dropdown is populated from the real cities in the database). Typing in
-  the search box narrows the list to name parts, phone, or card number. The card number
-  is shown prominently on every row to support the reverse-lookup use-case.
+- **6.1 Home / patient list:** on login, the home screen loads the **first page of
+  active patients** (200) in card-number order and shows a live count of the form
+  "X of Y patients". A **Load more** button fetches the next page; the list scales to
+  the clinic's full roster (7 000+) without loading everything up front. Staff can filter
+  by **Sex** and **City**; applying either filter — or opening the City dropdown —
+  **loads the complete active list** so filtering and the City options cover every patient
+  (City dropdown is populated from the real cities in the database). Typing in the search
+  box narrows the list to name parts, phone, or card number (search always queries the
+  full database, not just loaded pages). The card number is shown prominently on every row
+  to support the reverse-lookup use-case.
 - **6.2 Register:** validated form; card number auto-assigned. **Duplicate warning** if
   **either** (first+father+grandfather names match) **or** (phone matches) an existing
   patient — matches shown, staff may still proceed.
@@ -171,7 +184,9 @@ All backups/exports are copies of the **already-encrypted** DB → encrypted aut
 - **Admin-only**, tucked away in an Admin/Settings area, not on the main screen.
 - Column-mapping step + per-row validation (names, sex, phone). Bad rows **reported and
   skipped**, not silently dropped.
-- **Keeps existing card numbers**; auto-sequence continues from the highest.
+- **Card number is optional in the mapping.** Mapped → existing numbers are preserved
+  (including `6046/1`-style sub-cards). Unmapped or blank cell → the number is auto-assigned
+  in row order. Auto-sequence continues from the highest card.
 
 ---
 
@@ -222,8 +237,8 @@ language other than English.
 
 ## Decision Log (summary of choices made)
 
-- Card numbering: `first/sub`, sub 0–8, first unbounded, starts `1/0`, auto-assigned,
-  never reused.
+- Card numbering: **1–6045 plain sequential**, then **6046+** cycles `first/sub` with
+  sub 0–8. Auto-assigned, never reused. The 6045→6046 boundary is a client requirement.
 - Dates: DOB in Ethiopian calendar; all system timestamps in system clock time.
 - Age: stored with record date, computed live, auto-increments.
 - Patient form field order: first/father/grandfather names, sex, phone, age/DOB, city,
