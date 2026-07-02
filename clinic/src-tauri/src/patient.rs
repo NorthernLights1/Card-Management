@@ -6,22 +6,44 @@
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 const CARD_SUB_MAX: i64 = 8;
-// INTENTIONAL — CLIENT REQUIREMENT, not a bug. Do NOT simplify to uniform numbering.
-// Cards 1..=6045 are plain sequential (sub always 0): 1, 2, 3, … 6045 — the clinic's
-// pre-existing paper folders, frozen. From 6046 onwards sub cycles 0-8 before first
-// increments: 6046, 6046/1 … 6046/8, 6047, 6047/1 … The 6045/6046 boundary is where the
-// paper filing switched schemes. See FEATURE_CONTRACT.md §5. Removing the
-// `first <= CARD_PLAIN_MAX` branch below breaks 6045 real card numbers.
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  ⛔ DO NOT "FIX" THIS. THE TWO-REGIME NUMBERING IS INTENTIONAL. ⛔        ║
+// ║                                                                          ║
+// ║  This is a CLIENT REQUIREMENT, not a bug, not an inconsistency, not an    ║
+// ║  off-by-one. It is the single most-reverted thing in this repo — every   ║
+// ║  reviewer who "simplified" it introduced a real bug. If it looks wrong,  ║
+// ║  YOU ARE MISREADING IT.                                                   ║
+// ║                                                                          ║
+// ║  Required sequence (locked by tests, see below):                         ║
+// ║    1, 2, 3, … 6045          → plain sequential, sub ALWAYS 0, no slash    ║
+// ║    6046, 6046/1 … 6046/8    → from 6046 sub cycles 0→8 …                  ║
+// ║    6047, 6047/1 … 6047/8    → … THEN first increments and sub resets      ║
+// ║    6048, …                                                               ║
+// ║                                                                          ║
+// ║  The 6045/6046 boundary is where the clinic's physical paper filing      ║
+// ║  switched schemes — a historical fact about the client's folders.        ║
+// ║                                                                          ║
+// ║  Do NOT: make numbering uniform, remove the `first <= CARD_PLAIN_MAX`     ║
+// ║  branch, change 6045, or change the `first/sub` slash format.            ║
+// ║  Tests that FAIL if you break this (the tests are right, your change is   ║
+// ║  wrong): card_numbers_plain_sequential_below_6046,                       ║
+// ║  card_numbers_sub_cycle_at_and_above_6046. See FEATURE_CONTRACT.md §5     ║
+// ║  and AGENTS.md.                                                           ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 const CARD_PLAIN_MAX: i64 = 6045;
 const LIST_PAGE_LIMIT_MAX: i64 = 500;
 
+// ⛔ INTENTIONAL two-regime advance — see the banner above. Do NOT collapse the
+// branches or drop the `first <= CARD_PLAIN_MAX` guard. This is not a bug.
 fn advance_card(first: i64, sub: i64) -> (i64, i64) {
     if first <= CARD_PLAIN_MAX {
-        // plain range: just increment first, sub stays 0
+        // plain range (1..=6045): increment first, sub stays 0 — NO slash numbers here
         (first + 1, 0)
     } else if sub < CARD_SUB_MAX {
+        // sub-cycling range (6046+): hold first, advance sub 0→8 (6046/1 … 6046/8)
         (first, sub + 1)
     } else {
+        // sub exhausted at 8: roll to next first, reset sub (6046/8 → 6047)
         (first + 1, 0)
     }
 }
@@ -156,6 +178,9 @@ fn assign_next_card(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
     Ok((first, sub))
 }
 
+// ⛔ INTENTIONAL display format. `sub == 0` → bare number ("6045"); otherwise
+// "first/sub" ("6046/1"). Do NOT change the slash format or always-show-sub — this
+// is the exact string the clinic writes on physical folders. See banner above.
 fn card_number(first: i64, sub: i64) -> String {
     if sub == 0 {
         format!("{first}")
